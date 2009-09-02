@@ -1,0 +1,1689 @@
+* foof-loop: A Simple, Extensible Scheme Looping Facility -*-outline-*-
+
+This is the reference manual for foof-loop version 9 (BETA).  This file
+was written by Taylor R. Campbell and is placed in the Public Domain.
+
+The most recently released version of this file is permanently stored
+at <http://mumble.net/~campbell/scheme/foof-loop.txt>.  This file is
+temporarily stored, during the beta period of foof-loop version 9, at
+<http://mumble.net/~campbell/tmp/foof-loop.txt>.  This document is not
+finished: to be written is a section on augmented error reporting for
+the authors of iterators.
+
+** Installation
+
+To load foof-loop into your favourite Scheme system, simply load, in
+this order, the files at:
+
+  http://mumble.net/~campbell/scheme/let-values.scm
+  http://mumble.net/~campbell/scheme/syn-param.scm
+  http://mumble.net/~campbell/tmp/foof-loop.scm [beta version]
+
+See the section titled `Porting to New Schemes' below for more
+details on the implementation.
+
+** Introduction
+
+Every useful program has loops.  There are too many flavours of loops
+to classify all, but patterns worth naming recur.  Named LET and DO
+capture two flavours, but Scheme lacks any name for the pattern of
+looping through a list, CARing and CDRing to the end; or the pattern of
+looping through a vector, stepping indices from one bound to another.
+Procedures such as MAP and FOLD use these patterns, but compose poorly;
+one cannot easily FOLD a list and MAP a vector in parallel to yield a
+folded value and a mapped vector.  Foof-loop gives names to these
+patterns by which they can be composed together in a unified LOOP
+macro.
+
+*** Basic Looping: DO, Named LET, and LOOP
+
+Consider a loop that counts the number of items in a list that satisfy
+a predicate.  In standard Scheme, this might be written with named LET
+or DO; let us choose DO, which is slightly the conciser for this form
+of loop:
+
+  (define (count-matching-items list predicate)
+    (do ((list list (cdr list))
+         (count 0
+                (if (predicate (car list))
+                    (+ count 1)
+                    count)))
+        ((null-list? list) count)))
+
+This is straightforward, but if we wish to substitute a vector for a
+list, we must restructure of the loop so that it steps through the
+indices of the vector, rather than through the list's pairs:
+
+  (define (count-matching-items vector predicate)
+    (do ((index 0 (+ index 1))
+         (count 0
+                (if (predicate (vector-ref vector index))
+                    (+ count 1)
+                    count)))
+        ((= index (vector-length vector))
+         count)))
+
+Even worse, to count the matching items read from an input port, we
+must rewrite the loop using named LET, because we need an idiom which
+DO cannot express.  We must read from the port when the loop is entered
+and before we decide whether to stop the loop, because the decision
+depends on the object we read:
+
+  (define (count-matching-items reader input-port predicate)
+    (let continue ((count 0))
+      (let ((item (reader input-port)))
+        (if (eof-object? item)
+            count
+            (continue (if (predicate item)
+                          (+ count 1)
+                          count))))))
+
+Named LET captures a very general loop structure, and DO captures a
+much more specific loop structure, but neither captures any mechanism
+of iteration.  When looping through a list, one must CAR and CDR, and
+check for PAIR?; when looping through a vector, one must start at 0,
+increment indices, and check against the length; when looping through
+input, one must first read an object and check for the end of input.
+None of these patterns, of looping through a list, of looping through a
+vector, or of looping through input, is given any name in Scheme.
+
+Foof-loop provides just these names.  To loop for each item in a list,
+we say just that:
+
+  (define (count-matching-items list predicate)
+    (loop ((for item (in-list list))
+           (with count 0
+             (if (predicate item)
+                 (+ count 1)
+                 count)))
+      => count))
+
+How do we read this mountain of syntactic sugar?  LOOP is the macro
+that invokes foof-loop.  Its first operand is a list of loop clauses.
+The loop clause (FOR ITEM (IN-LIST LIST)) invokes the IN-LIST iterator,
+which steps through LIST, letting ITEM be successive elements of the
+list for each iteration of the loop.  The loop clause (WITH COUNT 0
+<update>) introduces COUNT as a variable whose value is 0 in the first
+iteration of the loop, and whose value at each next iteration is that
+of the expression <update>.  The loop repeats until any one of the loop
+clauses terminates it; in this case, loop will terminate when the list
+is exhausted of elements.  Finally, when the loop has terminated, it
+returns the value of the expression after `=>', here the number of
+matching items we counted.
+
+To count elements of a vector, we need only substitute IN-VECTOR for
+IN-LIST.  Likewise, to count objects read from an input port, we need
+only substitute IN-PORT, and specify the reader in (FOR ITEM (IN-PORT
+INPUT-PORT READER)).
+
+(Foof-loop gives names to mechanisms of iteration, but provides no
+generic iterators of `collections', `sequences', or `associations',
+whose mechanism is chosen from whether the input is a list, a vector,
+&c.  The author has experimented inconclusively with a generic
+protocol, based on Dylan's collections, to implement such iterators.)
+
+*** Controlling Loops
+
+An astute reader might wonder why we need `=>' before the final
+expression whose value the loop will return; another astute reader
+might wonder how LOOP can be as general as DO or named LET without any
+program body inside the loop.  Both will be relieved to learn that the
+LOOP form has a program body; the `=>' sets the final expression apart
+from the body.  Not only can we write a program body as in DO, but we
+can even give a name to the loop and specify where in the body to
+continue to the next iteration; then the loop does not implicitly
+continue after the body, which is evaluated in a tail position.  For
+example, to find a matching item, rather than to count all of them, we
+can write:
+
+  (define (find-matching-item list if-absent predicate)
+    (loop continue ((for item (in-list list)))
+      => (if-absent)
+      (if (predicate item)
+          item
+          (continue))))
+
+Here the loop continues only if ITEM fails to satisfy PREDICATE.  Then
+only if we have run through every element of LIST, and found none
+satisfying PREDICATE, shall we evaluate the final expression and call
+IF-ABSENT.  As before, we can substitute IN-VECTOR, IN-PORT, or any
+other iterator we please, for IN-LIST here.
+
+We are not limited to continuing the loop in tail positions in the loop
+body.  We could, for example, write a (single-list) MAP procedure thus:
+
+  (define (map procedure list)
+    (loop recur ((for element (in-list list)))
+      => '()
+      (cons (procedure element) (recur))))
+
+If the list is exhausted of elements, then the loop yields nil;
+otherwise, it recursively maps the remaining elements of the list, and
+makes a pair of the mapped ELEMENT and all the mapped remaining
+elements.
+
+Finally, we need not supply a final expression at all, in which case
+what the loop returns is unspecified.  For example, this program writes
+each element of a list LIST followed by a newline:
+
+  (loop ((for element (in-list list)))
+    (write element)
+    (newline))
+
+*** Updating Loop Variables
+
+A third astute reader -- not necessarily distinct from the first two --
+may wonder still how LOOP can be as expressive as named LET, with which
+one can update loop variables (which we introduced in LOOP using WITH
+clauses) when explicitly continuing the loop.  One can do this too with
+LOOP by passing arguments when continuing the loop; LOOP is a drop-in
+replacement for named LET, if we use the loop's name only in operator
+positions, the reason for which will become clear shortly.  This
+definition of REVERSE-MAP is unchanged by substituting LOOP for LET:
+
+  (define (reverse-map procedure list)
+    (let continue ((list list) (result '()))
+      (if (null-list? list)
+          result
+          (continue (cdr list)
+                    (cons (procedure (car list) result))))))
+
+The loop clauses (<variable> <initializer>) and (WITH <variable>
+<initializer>) are both equivalent to named LET bindings.  Passing
+arguments to CONTINUE updates the corresponding loop variables by
+position.  As with named LET, the update binds new variables, and does
+not assign existing ones.
+
+But the gripe with named LET that one hears most often is the distance
+between the list of loop variables and the expressions to update them.
+Worse, the only association between the variables and expressions is
+position.  Foof-loop gives the option of named update: the loop's name
+is bound to a macro, not a procedure, so that when continuing the loop,
+after any positional arguments, which are optional, an operand of the
+form (=> <variable> <expression>) updates the value of loop variable
+<variable> to <expression>.  For example, to partition a list into two
+lists, of the elements that satisfy a predicate and the elements that
+do not, we can update one of the two lists:
+
+  (define (partition predicate list)
+    (loop continue ((for element (in-list list))
+                    (with satisfied '())
+                    (with unsatisfied '()))
+      => (values (reverse satisfied)
+                 (reverse unsatisfied))
+      (if (predicate element)
+          (continue (=> satisfied (cons element satisfied)))
+          (continue (=> unsatisfied (cons element unsatisfied))))))
+
+Note well that the arrow `=>' has two different meanings in this code.
+
+*** Iterator-Supplied Loop Variables
+
+Sometimes it is not enough just to step through each element of a list
+or a vector; we may need to know at what index in the sequence we are,
+or we may need to move to another position.  Some iterators can expose
+their underlying loop variables.  IN-LIST can expose the pair whose car
+is the current element of the list.  It also ensures that modifying the
+cdr of that pair does not affect the iteration, so that we can safely
+reverse a list in place with it:
+
+  (define (reverse! list)
+    (loop ((for element pair (in-list list))
+           (with tail '() pair))
+      => tail
+      (set-cdr! pair tail)))
+
+This procedure steps through the list, letting TAIL be () initially and
+then the last pair we encountered; for each pair we encounter, we set
+its cdr to be the last one.  We happen not to use ELEMENT here,
+although we could use it in a REVERSE-MAP! procedure:
+
+  (define (reverse-map! procedure list)
+    (loop ((for element pair (in-list list))
+           (with tail '() pair))
+      => tail
+      (set-car! pair (procedure element))
+      (set-cdr! pair tail)))
+
+Often we find nested sublists which we want to coalesce into the
+containing list.  For example, we may want to flatten nested BEGINs in
+Scheme code.  We can flatten a BEGIN as we go by updating the loop
+variable of IN-LIST whenever we encounter a BEGIN, rather than simply
+letting IN-LIST implicitly update it to be its cdr:
+
+  (define (flatten-begins list)
+    (loop continue ((for element pair (in-list list))
+                    (with subforms '()))
+      => (reverse subforms)
+      (if (and (pair? element)
+               (eq? 'BEGIN (car element)))
+          (continue (=> pair (append (cdr element) (cdr pair))))
+          (continue (=> subforms (cons element subforms))))))
+
+If ELEMENT is a nested BEGIN, then at the next iteration, PAIR will be
+the first pair of the body to which the remaining elements of the
+enclosing body have been appended, and ELEMENT will be the first
+element of the concatenation.
+
+Vector iterators expose as a loop variable the index into the vector.
+This procedure shuffles a vector by the Fisher-Yates method, given a
+procedure (RANDOM-INTEGER <n>) yielding an integer between 0
+(inclusive) and <n> (exclusive):
+
+  (define (shuffle-vector! vector)
+    (loop ((for element i (in-vector vector)))
+      (let ((j (random-integer (+ i 1))))
+        (vector-set! vector i (vector-ref vector j))
+        (vector-set! vector j element))))
+
+*** Iterating over Numbers
+
+There are two iterators for iterating over numbers: UP-FROM and
+DOWN-FROM.  (These names violate the convention of the prefix of `IN-'
+on iterator names, but after long and arduous discussion, the author
+and his minions concluded them better than any alternatives.)  For
+example, to make a list of a given length by applying a procedure to
+each index for the element at that index, we can write:
+
+  (define (list-tabulate length procedure)
+    (loop ((for index (up-from 0 (to length)))
+           (with list '() (cons (procedure index) list)))
+      => (reverse list)))
+
+The keyword TO is part of the syntax of UP-FROM which specifies an
+upper bound for the iteration.  It is not a separate procedure or
+special operator.  We can step by a specified increment by adding (BY
+<increment>); for instance, this loop makes a list of the even integers
+less than N:
+
+  (loop ((for integer (up-from 0 (to N) (by 2)))
+         (with evens '() (cons integer evens)))
+    => (reverse evens))
+
+We can also omit TO in order to iterate without bound; presumably,
+then, we intend to terminate on some other condition.  For example, if
+we assume lists to be finite and non-circular, this procedure computes
+their lengths:
+
+  (define (unsafe-length list)
+    (loop ((for element (in-list list))
+           (for length (up-from 0)))
+      => length))
+
+The loop clause (FOR <variable> (UP-FROM <start> [(TO <end>)] [(BY
+<step>)])) iterates with <variable> initially bound to <start> and then
+updated at each iteration to its previous value plus <step>, until its
+value has reached or exceeded <end>.
+
+DOWN-FROM shares syntax with UP-FROM but subtly differs in semantics,
+and will illustrate a convention in the design of foof-loop which I
+shall give its own paragraph to emphasize its importance:
+
+Lower bounds are inclusive.  Upper bounds are exclusive.
+
+Thus UP-FROM includes the start and excludes the end, but DOWN-FROM
+excludes the start and includes the end, if it is reached.  If <start>
+- <end> is not an even multiple of <step>, DOWN-FROM too will exclude
+the end.  The same consequences apply to IN-VECTOR and the similar
+IN-VECTOR-REVERSE.  This bears repeating.
+
+Lower bounds are inclusive.  Upper bounds are exclusive.
+
+Whether we iterate forward or we iterate backward, whether over ranges
+of numbers or over ranges of elements in vectors, the lower bound of
+the iteration is inclusive and the upper bound of the iteration is
+exclusive.
+
+The number in DOWN-FROM, the index in IN-VECTOR-REVERSE, and the loop
+variable in any other iterator of descending numbers, is decremented by
+the step, not when loop variables are updated, but on entry to the
+loop.  This means that if the loop variable is initialized to 0, its
+first value in the loop body will be -1, not 0; and if it is updated to
+N, the next value that it may have in the loop body will be N - 1.
+
+Let me say it once more, to be sure that the reader understand.
+
+Lower bounds are inclusive.  Upper bounds are exclusive.
+
+Reverse iteration is extremely counter-intuitive.  One might be tempted
+to say that starting bounds should be inclusive and that ending bounds
+should be exclusive.  An earlier version of foof-loop followed this
+convention, which led to off-by-one adjustments galore:
+
+  (loop ((for element
+              (in-vector-reverse vector
+                                 (- (vector-length vector) 1)
+                                 -1)))
+    ...)
+
+This fragment is ugly and error-prone.  It may lead to negative
+`indices' into a vector.  (As an aside, C does not permit pointers to
+locations preceding the starts of array objects, but does permit
+pointers to locations one element past the ends of array objects.)  The
+same fragment reads much better if lower bounds are inclusive and upper
+bounds are exclusive:
+
+  (loop ((for element
+              (in-vector-reverse vector (vector-length vector) 0)))
+    ...)
+
+If one must use any other bounding convention, one should draw
+attention to it as an exception to the rule.  Use inclusive lower
+bounds and exclusive upper bounds if possible; if not, write the rules
+explicitly using WITH, LET, and UNTIL clauses.  For example, to loop
+with both bounds inclusive, write:
+
+  (loop (...
+         (with i start (+ i step))
+         (until (> i stop))
+         ...)
+    ...)
+
+*** Accumulating Results
+
+The only iterators we have seen are those that step through sequences.
+Every time we have accumulated a list of values, we have always written
+a manual loop variable, a manual CONS, and a manual REVERSE at the end.
+We can simplify with accumulating iterators such as LISTING.  With
+LISTING, (single-list) MAP becomes:
+
+  (define (map procedure list)
+    (loop ((for element (in-list list))
+           (for result (listing (procedure element))))
+      => result))
+
+Accumulators, as the reader has surely noticed, are named not by
+prefixing `IN-' but by suffixing `ING'.  Most accumulators have the
+same general syntax:
+
+  (FOR <accumulated-result> 
+       (<accumulating> [(INITIAL <initial-value>)]
+                       <datum and conditions>))
+
+<Initial-value> is a value to seed the accumulation with.  In LISTING,
+for example, it is the tail of the list after all the accumulated
+elements, and by default is nil.  <Datum and conditions> has several
+forms, of which we have already seen the form for accumulating a single
+value unconditionally.  To accumulate the value only if some condition
+is true, write (IF <condition>) after the datum:
+
+  (define (filter predicate list)
+    (loop ((for element (in-list list))
+           (for result
+                (listing element
+                         (if (predicate element)))))
+      => result))
+
+Sometimes we derive the value we want to accumulate from a non-false
+condition, as in COND's `=>' clause.  For example, to filter and map a
+list's elements, we accumulate all non-false values:
+
+  (define (filter-map procedure list)
+    (loop ((for element (in-list list))
+           (for result
+                (listing (procedure list) => (lambda (x) x))))
+      => result))
+
+Finally, the `=>' clause is extended as in SRFI 61.  An example of this
+is left to the imagination of the reader.
+
+Along with LISTING, there are three other similar list-related
+accumulators: LISTING-REVERSE, APPENDING, and APPENDING-REVERSE.  For
+elements elt_0, elt_1, ..., elt_n-1, elt_n, LISTING yields
+
+  (LIST elt_0 elt_1 ... elt_n-1 elt_n);
+
+LISTING-REVERSE yields
+
+  (LIST elt_n elt_n-1 ... elt_1 elt_0);
+
+APPENDING yields
+
+  (APPEND elt_0 elt_1 ... elt_n-1 elt_n);
+
+and APPENDING-REVERSE yields
+
+  (APPEND (REVERSE elt_n) 
+          (REVERSE elt_n-1)
+          ... 
+          (REVERSE elt_1)
+          (REVERSE elt_0)),
+
+although it can be implemented considerably more efficiently than
+(APPENDING (REVERSE ...)).
+
+There are two accumulators that make lists in place: LISTING! and
+LISTING-INTO!.  LISTING must make a list in reverse and then reverse it
+at the end, a process which requires twice as many pairs as the result
+uses; LISTING! makes a list forward by setting the cdr of each previous
+pair, and requires a total of one intermediate pair, the initial one.
+(LISTING-INTO! <initial-pair> <datum and conditions>) uses no
+intermediate pairs because it is seeded with an initial pair:
+
+  (let ((x (cons 'initial '())))
+    (loop ((for i (up-from 0 (to 10)))
+           (for result (listing-into! x (* i i) (if (even? i))))))
+    x)
+  ;Value: (INITIAL 0 4 16 36 64)
+
+Beware, though, that LISTING! and LISTING-INTO! are dangerous because
+they are non-reentrant.  If the loop is continued more than once from
+the same iteration, or if control may transfer non-locally into the
+loop body and repeat iterations, LISTING! and LISTING-INTO! may
+overwrite old results.
+
+*** Other LOOP Clauses: WHILE, UNTIL, LET, and LET-VALUES
+
+We have seen FOR and WITH clauses in LOOP expressions: FOR to dispatch
+to an iterator, and WITH to write the user's loop variables.  There
+remain four others: WHILE, UNTIL, LET, and LET-VALUES.
+
+To read the leading non-empty lines of a file, one might wish to
+iterate through the successive lines from an input port, making a list
+of them.  The iteration should terminate either when there are no more
+lines to be read or when the line just read is empty.  We can terminate
+the loop by naming it and only conditionally continuing; thus our
+initial attempt may resemble this procedure:
+
+  (define (read-initial-non-empty-lines input-port)
+    (loop continue ((for line (in-port input-port read-line))
+                    (for lines (listing line)))
+      => lines
+      (if (string-empty? line)
+          lines
+          (continue))))
+
+The final expression, LINES, is simple here, so we may not bat an eye
+at its duplication, although in the backs of our minds we should note
+that to avoid copying an elaborate expression would require more work.
+But this program fails altogether, because the variable LINES is not
+available inside the body of the loop; only once all the lines have
+been listed -- in reverse -- by IN-LIST will it reverse the list and
+bind the variable LINES, in the final expression.  Fortunately, we can
+force the loop to terminate and evaluate the final expression with all
+the bindings we expect, using WHILE or UNTIL:
+
+  (define (read-initial-non-empty-lines input-port)
+    (loop ((for line (in-port input-port read-line))
+           (until (string-empty? line))
+           (for lines (listing line)))
+      => lines))
+
+Iteration will terminate either when READ-LINE returns an EOF object,
+tested implicitly by IN-PORT, or when the line read is an empty string,
+tested explicitly by the user.  In either case, LISTING will bind LINES
+to the list of lines, which we return in the final expression.  By the
+way, the order of the clauses is irrelevant; we could just as well have
+written:
+
+  (define (read-initial-non-empty-lines input-port)
+    (loop ((until (string-empty? line))
+           (for lines (listing line))
+           (for line (in-port input-port read-line)))
+      => lines))
+
+(LET <variable> <expression>) binds <variable> to <expression> in the
+body of the loop.  (LET-VALUES <bvl> <producer>) is similar, but binds
+multiple values, rather than a single value; (LET <variable>
+<expression>) is equivalent to (LET-VALUES (<variable>) <expression>).
+
+Variables from iterators are bound in the right-hand sides of LET and
+LET-VALUES clauses; these, and variables from LET and LET-VALUES
+clauses, are bound in the conditions of WHILE and UNTIL clauses.  Thus
+variables from LET and LET-VALUES are bound, and WHILE and UNTIL
+conditions tested, after all iterators have agreed to let the loop
+continue.
+
+Thus concludes the introduction to foof-loop.  The rest of this
+document is a reference manual for foof-loop.
+
+** Loop Structure
+
+The LOOP form follows the general syntax:
+
+  (LOOP [<loop-name>] (<loop-clause> ...)
+    [=> <final-expression>]
+    [<body>])
+
+<Loop-clause> may have one of the following forms:
+
+  (<loop-variable> <initializer> [<update>])
+  (WITH <loop-variable> <initializer> [<update>])
+  (FOR <variable> ... (<iterator> <argument> ...))
+  (LET <variable> <expression>)
+  (WHILE <condition>)
+  (UNTIL <condition>)
+
+A loop steps through each iterator in parallel, repeatedly evaluating
+the body, until the termination condition of any loop clause is true.
+Then if the <final-expression> is supplied, it is evaluated in an
+environment with the final values of all the loop variables bound, as
+well as any final bindings supplied by the iterators; if there is no
+<final-expression>, the value of the invocation of the loop is
+unspecified.
+
+If <loop-name> is not supplied, the loop continues at the end of the
+loop body, which may be empty.  If <loop-name> is supplied, it is bound
+to a macro that must be called in the loop body to continue the loop.
+This macro may be called arbitrarily many times, in tail or non-tail
+positions; it is appropriate for recursive loops.  (Note, though, that
+some iterators are non-reentrant, which may make multiple calls unsafe.
+These iterators are discouraged, however, and by convention are marked
+with a suffix of `!'; e.g., LISTING! and LISTING-INTO!.)
+
+The macro <loop-name> accepts arguments by which to update the loop
+variables.  Arguments may be passed by position, or by name, or both.
+Positional arguments come first, corresponding with the loop variables
+in leading WITH clauses.  After positional arguments are updates to
+named variables, written (=> <variable> <update>).  Loop variables from
+iterators may be updated only by name.
+
+All arguments to <loop-name> are optional: all loop variables have
+default update expressions.  A loop variable from (WITH <variable>
+<initializer> [<update>]) by default either is updated to the value of
+<update>, or remains unchanged if no <update> was supplied.  Loop
+variables from iterators by default are updated according to the
+iterator.
+
+  (loop continue ((with a 0)
+                  (with b '()
+                    ;; Default update for B:
+                    (cons a b))
+                  (for c d (in-list '(i j k p q r))))
+    (write (list a b c d))
+    (newline)
+    (continue (+ a 1)    ;First position, for the first (WITH A 0).
+              (=> d (cddr d))))   ;D is from (FOR C D (IN-LIST ...)).
+  ;; Output:
+  ;(0 () i (i j k p q r))
+  ;(1 (0) k (k p q r))
+  ;(2 (1 0) q (q r))
+
+Many variables are involved in a loop, some written by the user and
+some which arise only from iterators.  Each variable falls into one of
+several classes:
+
+  - /Loop variables/ are initialized at the beginning of the loop and
+    updated at every iteration by rebinding (not by assignment).  Loop
+    variables are bound in the user termination conditions, the user
+    variable expressions, the loop body, and the final expression.
+
+  - /Entry variables/ are bound when each iteration of the loop is
+    entered, before the termination conditions have been tested.  They
+    cannot be updated like loop variables; each is always initialized
+    on loop entry to the value of the same expression.  This means that
+    the expression need not be duplicated at the beginning of the loop
+    and when the loop is continued.  Entry variables arise only from
+    iterators, and are bound in the user termination conditions, the
+    user variable expressions, the loop body, and the final expression.
+
+  - /Body variables/ are bound at each iteration of the loop only if no
+    iterator has terminated the loop.  Body variables arise only from
+    iterators, and are bound in the user termination conditions, the
+    user variable expressions, and the loop body.
+
+  - /User variables/ are bound after body variables have been bound,
+    but before WHILE and UNTIL conditions for terminating the loop.
+    User variables are introduced by LET and LET-VALUES clauses in
+    LOOP.  User variables are bound only in the user termination
+    conditions and the loop body.
+
+  - /Final variables/ are bound once at the end of the loop.  Final
+    variables arise only from iterators, and are bound only in the
+    final expression.
+
+The loop is controlled by the loop clauses:
+
+  (WITH <variable> <initializer> [<update>])
+    Introduces a loop variable named <variable>, initialized to the
+    value of <initializer>.  On each iteration of the loop, the
+    variable may be explicitly updated; if it is not explicitly
+    updated, but <update> was supplied, then the variable is updated to
+    the value of that expression in an environment with all loop
+    variables, entry variables, body variables, and user variables
+    bound; otherwise, <variable> remains unchanged at the next
+    iteration of the loop.
+
+  (<variable> <initializer> [<update>])
+    Identical to (WITH <variable> <initializer> [<update>]).  This form
+    is provided to make the LOOP syntax compatible with named LET, and
+    very similar to DO:
+
+      (let next ((x 0))
+        (if (< x 10)
+            (begin (write x) (next (+ x 1))))),
+
+      (loop next ((x 0))
+        (if (< x 10)
+            (begin (write x) (next (+ x 1))))),
+
+      (do ((x 0 (+ x 1)))
+          ((>= x 10))
+        (write x)), and
+
+      (loop ((x 0 (+ x 1))
+             (until (>= x 10)))
+        (write x))
+
+    are all equivalent.
+
+    Prefer the WITH syntax; it is visually distinct and easier for
+    pretty-printers to indent better with less effort.
+
+  (FOR <variable> ... (<iterator> <argument> ...))
+    General iteration form.  <Iterator> can do as it pleases with the
+    <variable>s and <argument>s, but by convention the <variable>s are
+    variables to be bound in the loop body or the final expression, and
+    the <argument>s are expressions or directives controlling the
+    iteration.
+
+    The FOR clauses have arbitrary order; relying on it is an error.
+
+  (LET <variable> <expression>)
+  (LET-VALUES <bvl> <expression>)
+    LET binds <variable> to the value of <expression> inside the body
+    bindings, and before the user termination conditions and loop body.
+    LET-VALUES binds all the variables in the bound variable list <bvl>
+    to the respective values returned by <expression>.  The clause (LET
+    <variable> <expression>) is equivalent to the clause (LET-VALUES
+    (<variable>) <expression>).
+
+  (WHILE <condition>)
+  (UNTIL <condition>)
+    After no iterator has terminated the loop, <condition> is evaluated
+    in an environment with all of loop variables, entry variables, body
+    variables, and user variables bound.  If true, the iteration
+    continues for WHILE and terminates for UNTIL, and vice versa.
+
+*** Lazy Loops
+
+(LAZY-LOOP <loop-name> (<loop-clause> ...)
+  => <final-expression>
+  <body>)
+
+  Lazily evaluated variant of LOOP which depends on SRFI 45 (Primitives
+  for Expressing Iterative Lazy Algoritms).  Equivalent to a LOOP form
+  wrapped in LAZY with all calls to the <loop-name> also wrapped in
+  LAZY.  (See the SRFI 45 for details on LAZY.)  The loop's body and
+  final expression both must yield promises.
+
+    ;;; Assume SRFI-40-style streams (see SRFI 40, A Library of
+    ;;; Streams, for details, particularly on even versus odd streams).
+    ;;; Also assume an IN-STREAM iterator.
+
+    (define (stream-filter predicate stream)
+      (lazy-loop filter ((for element (in-stream stream)))
+        => stream-nil
+        (if (predicate element)
+            (stream-cons element (filter))
+            (filter))))
+
+    ;;; An equivalent definition of STREAM-FILTER.
+
+    (define (stream-filter predicate stream)
+      (lazy
+       (loop filter ((for element (in-stream stream)))
+         => stream-nil
+         (if (predicate element)
+             (stream-cons element (lazy (filter)))
+             (lazy (filter))))))
+
+  The laziness annotations are added around the whole loop and around
+  calls to the loop, rather than around the loop body, in order to
+  delay any outer bindings of the loop (for example, many expressions
+  supplied as arguments to loop iterators) and any loop variable
+  updates when recursively invoking the loop.
+
+*** Loop Expansion
+
+When a LOOP form is fully expanded, the result has the form of:
+
+  (LET-VALUES ((<outer-bvl> <outer-producer>)
+               ...)
+    (DEFINE (LOOP-PROCEDURE <loop-variable> ...)
+      (LET-VALUES ((<entry-bvl> <entry-producer>)
+                   ...)
+        (LET ((FINISH (LAMBDA ()
+                        (LET-VALUES ((<final-bvl> <final-producer>))
+                          <final-expression>))))
+          (IF (OR <termination-condition> ...)
+              (FINISH)
+              (LET-VALUES ((<body-bvl> <body-producer>)
+                           ...)
+                (LET-VALUES ((<user-bvl> <user-producer>)
+                             ...)
+                  (IF (OR <user-termination-condition> ...)
+                      (FINISH)
+                      <loop-body>)))))))
+    (LOOP-PRODEDURE <loop-initializer> ...))
+
+Each <*-bvl> is a bound variable list supplied by an iterator or by the
+user.  Each <*-producer> is an expression yielding multiple values to
+be distributed to the corresponding bound variable list.  The
+<user-bvl>s are from user-supplied LET and LET-VALUES clauses; the
+<user-termination-conditions> are from WHILE and UNTIL clauses.
+
+LOOP-PROCEDURE is a name invisible to all of the forms involved in the
+loop except for the macro to which the loop's name is bound in the loop
+body.  This macro processes its positional and named arguments to form
+a call to LOOP-PROCEDURE updating all the loop variables appropriately.
+
+**** Efficiency Concerns
+
+Efficient code is a primary goal of LOOP.  It should be possible to
+write floating-point matrix multiplication routines as fast with LOOP
+as by hand, and perhaps faster because the details of the matrix
+operations can be swept under the rug of a matrix iterator.  There may
+be some questions, however, of the efficiency of the code that LOOP
+generates.
+
+***** Use of Assignment
+
+Many other loop macros, such as Common Lisp LOOP and SRFI 42 Eager
+Comprehensions, update loop variables by assignment, rather than by
+rebinding.  Even hand-written loops using named LET or DO are sometimes
+written with assignment, because it is more convenient with large
+numbers of loop variables which would otherwise be repeated mostly
+unchanged for every recursive call to the loop procedure.
+
+This is a death-knell for efficient code, especially in many highly
+optimizing Scheme compilers, because most Scheme compilers generate
+heap-allocated cells to store mutable variables.  Compilers' lives are
+simplified by assuming that all variables are immutable; they are free
+to move references to the variables as they please.  Transforming a
+program with SET! into a program without SET! but with heap-allocated
+cells is trivial, and lets the compilers assume that variables are
+immutable; eliding those cells anywhere but in closure references is
+considerably harder, and not worth the effort for idiomatic Scheme
+code.
+
+It may be the case that a pure tree interpreter can execute assignment-
+ridden code more efficiently than procedure calls with large numbers of
+arguments, because of the overhead of recursively processing each of
+those arguments.  It is also the case that tree interpreters are slow
+anyway.
+
+Using assignment to update loop variables is a losing proposition in
+the end.  LOOP never introduces assignments to mutable variables; all
+loop variables are updated by recursive procedure call, i.e. rebinding.
+Custom iterators may, but should not, use assignment.
+
+***** Local Closure for FINISH
+
+Because the construction of a closure for FINISH is costly in many
+Scheme implementations which have extremely naive compilers, the
+current implementation of LOOP creates the closure only if necessary to
+preserve scope; it will integrate the body of FINISH if and only if
+there are no user termination conditions, or there are no iterator-
+supplied termination conditions, iterator-supplied body bindings, and
+user-supplied bindings around the body.
+
+However, programmers who are worried about the closure for FINISH would
+probably be better served by a Scheme implementation that goes to the
+slighest effort necessary to recognize the local closure and fold the
+unconditional jumps into the code for the conditional.
+
+***** Multiple Return Values
+
+Opponents of multiple return values may object to the pervasion of
+LET-VALUES throughout the expansion and the inefficiency thereof in
+Scheme implementations that do not subscribe earnestly to the doctrine
+of multiple return values.  But LET-VALUES is the only way to allow
+iterators to bind multiple variables that may have complex inter-
+dependencies without the indirection and cost of intermediate data
+structures.
+
+There is no cost in Scheme systems with efficient support for multiple
+return values.  There will be a cost in Scheme systems with costly
+multiple return values, whether LOOP uses multiple return values, and
+incurs the cost implicitly, or whether LOOP generates code to construct
+intermediate data structures.  But on Scheme systems with efficient
+multiple return value support, LOOP incurs no cost.  By using multiple
+return values, LOOP defers the question of the cost to the Scheme
+implementation.
+
+Furthermore, for most cases, there is only a single return value
+anyway.  LET-VALUES itself can avoid whatever overhead there may be of
+multiple return values, simply by recognizing single-value cases.
+Unfortunately, the reference implementation of SRFI 11 does not do
+this, and will generate CALL-WITH-VALUES invocations for every binding
+clause in the LET-VALUES.  Here is a better implementation:
+
+  <http://mumble.net/~campbell/scheme/let-values.scm>.
+
+***** Index Variables and Generic Arithmetic
+
+Many Scheme implementations provide specialized arithmetic operators on
+limited integers fixed to an interval whose values fit in machine
+registers.  These limited integers, often called `fixnums', are
+typically guaranteed to contain the domain of vector indices.  Fixnum
+arithmetic is usually much faster than generic arithmetic -- when it
+does not overflow and yield completely bogus answers.
+
+LOOP generates generic arithmetic for index variables, in iterators
+such as UP-FROM and IN-VECTOR.  There are a number of reasons for
+this:
+
+1. There is no portable specialized arithmetic for LOOP to use.
+
+2. LOOP is meant not only for code inside inner loops that must be as
+   fast as possible; programs written with LOOP should not fail
+   obscurely because they passed some iterator a non-fixnum value where
+   a fixnum was expected.
+
+3. The iterators provided by foof-loop would be complicated by support
+   for fixnum arithmetic.  Do we add, for example, UP-FROM-FIXNUM,
+   UP-FROM-UNSIGNED-FIXNUM, and so on?  Do we have IN-VECTOR,
+   IN-VECTOR/UNSAFE, and so on?
+
+4. Programs that use fixnum arithmetic are harder to understand,
+   because with fixnum arithmetic comes a plethora of subtle
+   implications.  For example, the usual formula for the average of two
+   integers -- (QUOTIENT (+ A B) 2) -- is no longer valid under fixnum
+   arithmetic, because the sum may overflow the bounds of fixnums.  A
+   program that once used Scheme vectors but has been converted to use
+   sparse vectors, whose indices are arbitrary integers, may no longer
+   be able to use fixnum arithmetic.
+
+It is up to the compiler to specialize the generic arithmetic where
+appropriate, such as the indices inside IN-VECTOR, and to insert pre-
+loop type and range checks where appropriate.  Programmers who use
+compilers incapable of this should consider finding better compilers,
+or improving the ones they use.
+
+Common Lisp, by comparison, has no specialized arithmetic operators;
+rather, it lets programmers declare the types of variables' values.
+This is even more specific than specialized arithmetic, and does not
+require N arithmetic routines for every kind of specialized arithmetic,
+so that it composes with macros well.  This is a better way to improve
+the efficiency of arithmetic, and requires minimal changes to LOOP --
+at most, support for iterators to supply declarations in the loop.
+
+** Iterators
+
+*** Iterating across Lists
+
+(FOR <element> [<pair>] (IN-LIST <list> [<successor>]))
+
+  Iterates for each successive pair in <list>, binding the variable
+  <pair>, if supplied, to that pair, and the variable <element> to the
+  car of that pair.  The successor of the pair is taken by applying
+  <successor> to the current pair.  The iteration runs out when the
+  successor is no longer a pair.
+
+  <Successor>, if supplied, must be a unary procedure.  The default
+  value of <successor> is CDR.  <List> and <successor> are evaluated
+  once before the loop begins.
+
+  <Pair> is a loop variable; its value in the final expression is
+  unspecified.
+
+  <Element> is a body variable.
+
+  The next pair is taken before the loop body, so the loop body may
+  reliably apply SET-CDR!, or its equivalent for the given successor
+  procedure, to the pair, without altering the iteration.  Note,
+  though, that <successor> will be called irrespective of whether
+  <pair> is updated explicitly.
+
+    (loop ((for a (in-list '(a b c)))
+           (for b (in-list '(p q r))))
+      (write (list a b))
+      (newline))
+    ;; Output:
+    ;(a p)
+    ;(b q)
+    ;(c r)
+
+    (loop ((for x (in-list '(1 2 3)))
+           (with y 0 (+ y (* x 2))))
+      => y)
+    ;Value: 12
+
+    ;;; PAIR-FOLD from SRFI 1.
+
+    (define (pair-fold kons knil list)
+      (loop ((for elt pair (in-list list))
+             (with knil knil (kons pair knil)))
+        => knil))
+
+(FOR <elements> [<pairs>] (IN-LISTS <lists> [<tail>]))
+
+  Iterates for each successive pair in each parallel element of <lists>,
+  binding the variable <pairs>, if supplied, to be a list of those
+  pairs, and the variable <elements> to a list of the cars of those
+  pairs, prepended to the value of <tail> evaluated at each iteration.
+  If no <tail> is supplied, its default value is the empty list.  The
+  successor of each pair is taken by CDR.  The iteration runs out when
+  any successor is no longer a pair.
+
+  <Lists> must be a non-empty list; it is an error if otherwise.  It is
+  evaluated once before the loop begins.
+
+  <Pairs> is a loop variable; its value in the final expression is
+  unspecified.
+
+  <Elements> is a body variable.
+
+  The cdrs are taken before the loop body, so the loop body may
+  reliably apply SET-CDR! to any of the pairs without altering the
+  iteration.
+
+    ;;; Transpose a matrix represented as a nested list.
+
+    (loop ((for columns (in-lists '((a b c) (d e f))))
+           (with rows '() (cons columns rows)))
+      => rows)
+    ;Value: ((c f) (b e) (a d))
+
+    (define (every? predicate list . lists)
+      (loop proceed ((for elts (in-lists (cons list lists))))
+        (and (apply predicate elts)
+             (proceed))))
+
+    (define (any predicate list . lists)
+      (loop proceed ((for elts (in-lists (cons list lists))))
+        (or (apply predicate elts)
+            (proceed))))
+
+    ;;; SRFI 1's signature for FOLD.  Notice that KNIL is the *last*
+    ;;; argument to the FOLD procedure, so we have to tack it on to the
+    ;;; end of the argument list.
+
+    (define (fold kons knil list . lists)
+      (loop ((with knil knil (apply kons arguments))
+             (for arguments 
+                  (in-lists (cons list lists)
+                            (cons knil '()))))
+        => knil))
+
+*** Iterating across Vectors and Strings
+
+(FOR <element> [<index>] (IN-VECTOR         <vector> [<low> [<high>]]))
+(FOR <element> [<index>] (IN-STRING         <string> [<low> [<high>]]))
+(FOR <element> [<index>] (IN-VECTOR-REVERSE <vector> [<high> [<low>]]))
+(FOR <element> [<index>] (IN-STRING-REVERSE <string> [<high> [<low>]]))
+
+  These iterate for each successive index in the vector or string,
+  respectively, binding the variable <index>, if supplied, to that
+  index, and the variable <element> to the element at that index.
+
+  IN-VECTOR and IN-STRING run from <low>, inclusive, to <high>,
+  exclusive; IN-VECTOR-REVERSE and IN-STRING-REVERSE run from <high>,
+  exclusive, to <low>, inclusive.
+
+  <Vector> or <string> must be a vector or a string, respectively.
+  <Low> and <high>, if supplied, must be exact, non-negative integers,
+  and valid bounds for <string> or <vector>.  The default values of
+  <low> and <high> are 0 and the length of the vector or string,
+  respectively.  <Vector>, <string>, <low>, and <high> are all
+  evaluated once before the loop begins.
+
+  <Index> is a loop variable; its value in the final expression is the
+  value of the last bound of iteration (the value of <high> for
+  IN-VECTOR and IN-STRING; the value of <low> for IN-VECTOR-REVERSE and
+  IN-STRING-REVERSE).  With the reverse iterators, IN-VECTOR-REVERSE
+  and IN-STRING-REVERSE, explicitly updating <index> when continuing
+  the loop will cause the next value seen by the loop body to be
+  one *less* than what the index was updated to.  That is, on loop
+  entry, <index> is assumed to be an exclusive upper bound, and so it
+  is tested for termination and then decremented to find the actual
+  index.
+
+  <Element> is a body variable.
+
+  Because the lower bound is inclusive and the upper bound is
+  exclusive, for IN-VECTOR and IN-STRING, the first value of <index> is
+  <low>, and the value of <index> in the final expression is <high>;
+  while for IN-VECTOR-REVERSE and IN-STRING-REVERSE, the first value of
+  <index> in the loop body is one less than <high>, and the value of
+  <index> in the final expression is <low>.
+
+    (loop ((for a i (in-vector '#(foo bar baz)))
+           (for b j (in-string-reverse "abcdefghi" 6 3)))
+      => (list i j)
+      (write (list a i b j))
+      (newline))
+    ;Value: (3 3)
+
+    ;; Output:
+    ;(foo 0 f 5)
+    ;(bar 1 e 4)
+    ;(baz 2 d 3)
+
+    ;;; Find the first index of an element satisfying a predicate.
+
+    (define (vector-index vector predicate)
+      (loop proceed ((for elt index (in-vector vector)))
+        (if (predicate elt)
+            index
+            (proceed))))
+
+    ;;; Copy characters from one string to another.
+
+    (define (string-copy! target tstart source sstart send)
+      (loop ((for char (in-string source sstart send))
+             (with index tstart (+ index 1)))
+        (string-set! target index char)))
+
+    (loop proceed 
+        ((for v i
+           (in-vector
+            '#(a b c d e f g h i j k l m n o p q r s t u v w x y z))))
+      (write (list v i))
+      (newline)
+      (proceed (=> i (+ 1 (* i 2)))))
+    ;; Output:
+    ;(a 0)
+    ;(b 1)
+    ;(d 3)
+    ;(h 7)
+    ;(p 15)
+
+*** Iterating through Input
+
+(FOR <datum> (IN-PORT <input-port> [<reader> [<eof?>]]))
+
+  Iterates for successive data read from <input-port>, binding the
+  variable <datum> to the datum read by applying the value of <reader>.
+  Iteration terminates when the datum read satisfies the predicate
+  <eof?>.
+
+  <Input-port> is usually an input port.  <Reader> and <eof?>, if
+  supplied, must be unary procedures.  The default value of <reader> is
+  READ-CHAR, and the default value of <eof?> is EOF-OBJECT?.
+  <Input-port>, <reader>, and <eof?> are all evaluated once before the
+  loop begins.
+
+  <Datum> is an entry variable.
+
+    (define (read-line input-port)
+      (let ((initial (peek-char input-port)))
+        (if (eof-object? initial)
+            initial
+            (loop ((for char (in-port input-port))
+                   (until (char=? char #\newline))
+                   (with chars '() (cons char chars)))
+              => (list->string (reverse chars))))))
+
+    (define (read-all input-port)
+      (loop ((for datum (in-port input-port read))
+             (with data '() (cons datum data)))
+        => (reverse data)))
+
+(FOR <datum> (IN-FILE <pathname> [<reader> [<eof?>]]))
+
+  Opens an input port from the file named by <pathname>, iterates as
+  with IN-PORT from the newly opened input port, and closes the input
+  port after iteration terminates.
+
+  <Datum> is an entry variable.
+
+    (define (read-lines-from-file pathname)
+      (loop ((for line (in-file pathname read-line))
+             (with lines '() (cons line lines)))
+        => (reverse lines)))
+
+    (define (file-length pathname)
+      (loop ((for char (in-file pathname))
+             (with count 0 (+ count 1)))
+        => count))
+
+*** Iterating over Numbers
+
+(FOR <number> (UP-FROM   <low>  [(TO <high>)] [(BY <step>)]))
+(FOR <number> (DOWN-FROM <high> [(TO <low>)]  [(BY <step>)]))
+
+  Iterates for each successive number starting at <low> and
+  incrementing by <step> at every iteration, for UP-FROM; or starting
+  at <high> and decrementing by <step> at every iteration, for
+  DOWN-FROM.  <Number> is bound to the current number.  If the TO
+  parameter is supplied, iteration terminates when the number exceeds
+  the given bound.
+
+  <Low>, <high>, and <step> must all be exact numbers.   If a TO
+  parameter is supplied, they must furthermore all be real numbers.
+  They are all evaluated once before the loop begins.
+
+  <Number> is a loop variable in UP-FROM.  In DOWN-FROM, the treatment
+  of <number> is somewhat subtle in order to do the right thing as much
+  as possible, illustrated in the examples (to which the baffled reader
+  may wish to skip immediately).  <Number> is a loop variable, and
+  alternately an entry variable or a body variable, depending on the
+  use of DOWN-FROM.  If DOWN-FROM is given a lower bound, then <number>
+  is a body variable, and its value will never descend below <low> as a
+  body variable.  The final value of the variable will be not <low>,
+  but the least value it attains before descending below <low>, which
+  may or may not be <low>.  If DOWN-FROM is not given a lower bound,
+  then <number> is an entry variable, initialized to <step> less than
+  the value of the loop variable <number>.  There are two consequences
+  to this, and two reasons motivating it:
+
+    (C1) After updating <number> as a loop variable to some number N,
+         <number> as a body variable in the next iteration will be
+         <step> *less* than N.
+
+    (C2) <Number> will be initialized to the value of <high>, but
+         unless the loop terminates with zero iterations, neither the
+         loop variable <number> nor the body variable <number> will
+         ever be observed with the value <high>.  In the rare case that
+         the loop terminates with zero iterations, <number> may be
+         observed in the final expression with the value of <high>.
+
+    (R1) As repeated in the introduction, lower bounds are inclusive,
+         and upper bounds are exclusive.  However, <high> - <low> may
+         not be an integral multiple of <step>, so that <number> may
+         never be <low>.  With the semantics chosen, <number> will at
+         least always be in the interval [<low>, <high>], and in fact
+         as a body variable always in the interval [<low>, <high>);
+         only in the rare case of a loop terminated after zero
+         iterations will <number> be observable with the value <high>.
+         (Of course, with explicit updates, it may take on any value.)
+
+    (R2) When there is no lower bound, it is often useful (a) to write
+         user-supplied termination conditions in terms of <number>, and
+         (b) to use, in the final expression, the value of <number>
+         that induced termination of the loop.  The example of a vector
+         quick-sorting routine below illustrates such a use of <number>
+         in scanning backward from the end of a subvector past elements
+         greater than the pivot.
+
+  The more persevering reader, no doubt now exhausted by the above
+  tortuous contortions of explanation, will be relieved to escape into
+  a collection of illustrative examples.
+
+    (define (iota count start step)
+      (loop ((for n (up-from 0 (to count)))
+             (for result (listing (+ start (* n step)))))
+        => result))
+
+    ;;; Note that the following is incorrect, if the arguments to IOTA
+    ;;; may be inexact numbers:
+
+    (define (iota count start step)
+      (loop ((for n (up-from start
+                             (to (+ start (* count step)))
+                             (by step)))
+             (for result (listing n)))
+        => result))
+
+    (define (sieve n)
+      (let ((table (make-bit-string (- n 2) #t)))
+        (define (prime? k) (bit-string-ref table (- k 2)))
+        (define (not-prime! k) (bit-string-clear! table (- k 2)))
+        (define (purge-multiples i)
+          (loop ((for j (up-from (* i i)
+                                 (to n)
+                                 (by i))))
+            (not-prime! j)))
+        (loop proceed ((for i (up-from 2 (to n)))
+                       (with primes '()))
+          => (reverse primes)
+          (if (prime? i)
+              (begin (purge-multiples i)
+                     (proceed (=> primes (cons i primes))))
+              (proceed)))))
+
+    (define (vector-quick-sort! elt< vector start end)
+      (loop sort ((start start) (end end))
+        (if (< 1 (- end start))
+            (let ((pivot (select-pivot vector start end)))
+              (loop continue ((i start) (j end))
+                (let ((i (loop ((for i (up-from i))
+                                (while (elt< (vector-ref vector i) pivot)))
+                           => i))
+                      (j (loop ((for j (down-from j))
+                                (while (elt< pivot (vector-ref vector j))))
+                           => j)))
+                  (if (< i j)
+                      (begin (vector-exchange! vector i j)
+                             (continue (+ i 1) j))
+                      (begin (sort (=> end i))
+                             (sort (=> start (+ j 1)))))))))))
+
+*** Accumulating
+
+Accumulating iterators all follow the same basic forms: accumulate each
+value of an expression into a result, with an optional condition for
+the accumulation.  Accumulators differ according to the way that they
+accumulate, whether the intermediate result of accumulation is
+available in the body of the loop or whether only the fully accumulated
+result is available in the final expression, and whether the
+accumulator accepts an optional initial value argument.
+
+Accumulators generally have the following forms:
+
+- Unconditional:
+
+    (FOR <result> (<accumulating> <datum>))
+
+  <Datum> is evaluated and its value accumulated.
+
+- Conditional:
+
+    (FOR <result> (<accumulating> <datum> (IF <condition>)))
+
+  <Condition> is evaluated; if it yields true, <datum> is evaluated and
+  accumulated.
+
+- COND-style -- if <condition> is true, apply the value of <mapper> to
+  the value of <condition> to yield the value to accumulate:
+
+    (FOR <result> (<accumulating> <condition> => <mapper>))
+
+  <Condition> is evaluated; if it yields true, <mapper> is evaluated
+  and its value applied to the value of <condition>.  What <mapper>
+  returns is accumulated.
+
+- Extended (SRFI 61) COND-style:
+
+    (FOR <result> (<accumulating> <generator> <tester> => <mapper>))
+
+  <Generator> and <tester> are evaluated, and the value of <tester>
+  applied to arguments of the values yielded by <generator>.  If
+  <tester> returns true, <mapper> is evaluated and its value applied
+  also to arguments of the values yielded by <generator>.  What
+  <mapper> returns is accumulated.
+
+Subexpressions such as <datum>, <condition>, &c., are evaluated in an
+environment with all loop, entry, and body variables bound from the
+current iteration.  Some accumulators also have initial values,
+supplied with an optional (INITIAL <initial-value>) form before any of
+the other arguments to the accumulator.
+
+Accumulators that are allowed to operate by destructively modifying
+internal state are marked with `!' suffixes.  These accumulators are
+/non-reentrant/, which means that it is unsafe to write loops that may
+be recursively run more than once, and that non-local re-entry may
+destroy values returned from the loop.
+
+**** Accumulating Lists
+
+(FOR <result> (LISTING [(INITIAL <tail>)] ...))
+(FOR <result> (LISTING-REVERSE [(INITIAL <tail>)] ...))
+
+  These each produce lists of the accumulated data with a final cdr of
+  <tail>.  LISTING yields a list in the order that the data were
+  produced; LISTING-REVERSE yields a list in the reverse order of that.
+
+  <Tail>, if supplied, is evaluated once before the beginning of the
+  loop.  The default value of <tail> is the empty list.
+
+  For LISTING, <result> is a final variable.
+
+  For LISTING-REVERSE, <result> is a loop variable; its value in the
+  final expression is the accumulated list in reverse.
+
+    (define (list-tabulate length procedure)
+      (loop ((for i (up-from 0 (to length)))
+             (for list (listing (procedure i))))
+        => list))
+
+    (define (take list count)
+      (loop ((for i (up-from 0 (to count)))
+             (for elt (in-list list))
+             (for prefix (listing elt)))
+        => prefix))
+
+    (define (append-reverse list tail)
+      (loop ((for elt (in-list list))
+             (for result (listing-reverse (initial tail) list)))
+        => result))
+
+    (define (unzip5 list)
+      (loop ((for component (in-list list))
+             (for result1 (listing (first component)))
+             (for result2 (listing (second component)))
+             (for result3 (listing (third component)))
+             (for result4 (listing (fourth component)))
+             (for result5 (listing (fifth component))))
+        => (values result1 result2 result3 result4 result5)))
+
+(FOR <result> (APPENDING [(INITIAL <tail>)] ...))
+(FOR <result> (APPENDING-REVERSE [(INITIAL <tail>)] ...))
+
+  These append the accumulated data into a list with a final cdr of
+  <tail>.  APPENDING maintains the order of the lists and their
+  elements; APPENDING-REVERSE reverses the elements of the lists.  The
+  accumulated data must all be proper lists.
+
+  <Tail>, if supplied, is evaluated once in the environment outside the
+  loop.  The default value of <tail> is the empty list.
+
+  For APPENDING, <result> is a final variable.
+
+  For APPENDING-REVERSE, <result> is a loop variable; its value in the
+  final expression is the reverse-concatenated list.
+
+    (define (concatenate lists)
+      (loop ((for list (in-list lists))
+             (for result (appending list)))
+        => list))
+
+(FOR <result> (LISTING! [(INITIAL <tail>)] ...))
+(FOR <result> (LISTING-INTO! <pair> [(INITIAL <tail>)] ...))
+
+  LISTING! builds up a list with a final cdr of <tail>.  LISTING-INTO!
+  builds up a list with a final cdr of <tail> and destructively stores
+  it in the cdr of <pair>.  Both use as little intermediate storage as
+  possible, which may involve using destructive operations, and as a
+  consequence are non-reentrant.
+
+  <Tail>, if supplied, is evaluated once in the environment outside the
+  loop.  The default value of <tail> is the empty list.
+
+  <Result> is a final variable.
+
+**** Accumulating Numerical Results
+
+(FOR <result> (SUMMING [(INITIAL <initial-sum>)] ...))
+(FOR <result> (MULTIPLYING [(INITIAL <initial-product>)] ...))
+
+  Accumulates sums or products by adding the accumulated data to
+  <initial-sum>, or multiplying the accumulated data by
+  <initial-product>.
+
+  <Initial-sum> and <initial-product>, if supplied, must be numbers,
+  and are evaluated once before the loop begins.  The default value of
+  <initial-sum> is 0, and the default value of <initial-product> is 1.
+
+  <Result> is a loop variable.
+
+    (define (count predicate list)
+      (loop ((for elt (in-list list))
+             (for count (summing 1 (if (predicate elt)))))
+        => count))
+
+(FOR <result> (MINIMIZING [(INITIAL <initial-minimum>)] ...))
+(FOR <result> (MAXIMIZING [(INITIAL <initial-maximum>)] ...))
+
+  Finds the minimum or maximum datum accumulated.  If an initial value
+  expression is provided, it is evaluated once before the beginning of
+  the loop, all of the data involved must be real numbers, and <result>
+  will be a real number.  If no initial value is provided, the data
+  must be either real numbers or false, and <result> will be either a
+  real number or false.
+
+  <Result> is a loop variable.
+
+** Writing Custom Iterators
+
+(NOTE:  This section documents the implementation of iterators for
+Taylor R. Campbell's current version of foof-loop.  It does *not*
+document the version originally written by Alex Shinn (after whose
+nickname, `foof', the system is named), which has a somewhat less
+flexible interface for custom iterators.)
+
+Extensibility is a primary goal of foof-loop.  Writing custom iterators
+is a matter of specifying the syntax of the iterator, all of the loop
+variables and other variables bound by the loop, and the loop's
+termination conditions.  In order to implement foof-loop in portable
+SYNTAX-RULES, iterators are macros in continuation-passing style.
+
+When LOOP encounters a clause of the form 
+
+  (FOR <variable> ... (<iterator> . <arguments>)),
+
+it invokes <iterator> as (<iterator> (<variable> ...) <arguments>
+<continuation> . <environment>), where <environment> is information
+that LOOP needs in order to continue processing the other loop clauses,
+and where <continuation> is a macro that returns control back to LOOP
+given a description of all the variables bound by and termination
+conditions tested for the iterator at hand.
+
+The continuation should be invoked as follows:
+
+  (continuation
+   ((<outer-bvl> <outer-producer>) ...)
+   ;; Outer variables to be bound once outside the whole loop.
+   ;; Each <outer-producer> is evaluated once in the enclosing
+   ;; environment of the LOOP form.
+
+   ((<loop-variable> <initializer> <update>) ...)
+   ;; Loop variables.  Each <initializer> is evaluated in an
+   ;; environment where the outer variables are bound.  Each <update>
+   ;; is evaluated in an environment where the outer variables, loop
+   ;; variables, entry variables, and body variables are all bound.
+
+   ((<entry-bvl> <entry-producer>) ...)
+   ;; Entry variables, to be bound each time the loop is entered.
+   ;; Each <entry-producer> is evaluated in an environment where the
+   ;; outer variables and loop variables are bound.
+
+   (<termination-condition> ...)
+   ;; Conditions that will terminate the loop.  These are all evaluated
+   ;; in an environment where the outer variables, loop variables, and
+   ;; entry variables are bound.  The first condition, of any loop
+   ;; clause, that holds true will terminate the iteration, short-
+   ;; circuiting the rest of the termination conditions.
+
+   ((<body-bvl> <body-producer>) ...)
+   ;; Variables to be bound around the body of the loop, if the loop
+   ;; does not terminate.
+
+   ((<final-bvl> <final-producer>) ...)
+   ;; Variables to be bound around the final expression of the loop, if
+   ;; the loop does terminate.
+
+   . environment).
+
+The <*-bvl>s are bound variable lists, and the variables in them are
+bound to the respective values of the corresponding <*-producer>
+expressions, as with LET-VALUES.  The bindings are made in parallel,
+also as with LET-VALUES.  To make interdependent bindings, use multiple
+return values in a single binding clause.  See the section titled `Loop
+Expansion' for the placement of these parts in the code generated by
+LOOP.
+
+The order of the arguments to the continuation is intended to reflect
+the order of control through the loop: first the outer variables are
+bound, then the loop variables are initialized, then the entry
+variables are bound, then the termination conditions are tested, and
+finally either the body variables bindings or the final variables are
+bound, depending on the termination conditions.
+
+For example, here is a simplified definition of IN-LIST, omitting
+support for a user-supplied loop variable, a user-supplied list
+successor procedure, and the guarantee that SET-CDR! may be safely
+applied to the pair without altering the iteration.  For the sake of
+concision, we use the name `next' for the continuation and `rest' for
+the environment.  In this simplified IN-LIST, we expect one variable in
+FOR and one argument after IN-LIST -- i.e., (FOR <element-variable>
+(IN-LIST <list-expression>)) --; hence, the initial two arguments to
+the actual macro are `(element-variable)' and `(list-expression)'.
+
+  (define-syntax in-list
+    (syntax-rules ()
+      ((IN-LIST (element-variable) (list-expression) next . rest)
+       (next (((LIST) list-expression))      ;Outer bindings
+             ((PAIR LIST (CDR PAIR)))        ;Loop variables
+             ()                              ;Entry bindings
+             ((NOT (PAIR? PAIR)))            ;Termination conditions
+             (((element-variable)            ;Body bindings
+               (CAR PAIR)))
+             ()                              ;Final bindings
+             . rest))))
+
+*** Reporting Syntax Errors
+
+The above definition of IN-LIST will work, but, if used incorrectly, it
+would yield a strange syntax error incomprehensible to the casual user
+of foof-loop, involving a great deal of state internal to the LOOP
+macro.  This is not what users like to see; users like to see useful,
+comprehensible error messages that are directly related to what they
+wrote.  foof-loop provides two macros for reporting syntax errors:
+SYNTACTIC-ERROR and LOOP-CLAUSE-ERROR.  SYNTACTIC-ERROR is a general
+way to report errors in macros:
+
+  (SYNTACTIC-ERROR <message> <form> ...)
+
+will cause an error to be reported when this form is expanded, ideally
+involving the given message and subforms.  Many loop iterators are
+implemented in terms of internal utilities handling the general
+patterns of several specialized cases, such as IN-VECTOR and IN-STRING,
+which generate very similar code.  In order to report specific syntax
+errors that correspond with what was actually the input to the LOOP
+macro, these iterators pass error context descriptors to one another.
+Error context is of the form
+
+  (<name> (<variable> ...) <arguments> <message>),
+
+where <name> is the name of the iterator, the <variable>s are the forms
+passed in the FOR clause before the iterator, <arguments> is the tail
+of the iterator subform inside the FOR clause, and <message> is a
+message explaining the error.  Because of limitations in SYNTAX-RULES,
+the error reporting macros cannot construct a message containing
+<name>; thus <message> should identify the name of the iterator.  The
+macro LOOP-CLAUSE-ERROR invokes SYNTACTIC-ERROR with a FOR form that
+corresponds with the original FOR form seen by LOOP:
+
+  (LOOP-CLAUSE-ERROR (<name> (<variable> ...) <arguments> <message>))
+
+expands to
+
+  (SYNTACTIC-ERROR <message>
+                   (FOR <variable> ...
+                        (<name> . <arguments>))).
+
+Using LOOP-CLAUSE-ERROR for more robust syntax error notification, we
+can write the simplified IN-LIST by adding a fall-through syntax rule
+that matches any possible invocation of the iterator from LOOP:
+
+  (define-syntax in-list
+    (syntax-rules ()
+      ((IN-LIST (element-variable) (list-expression) next . rest)
+       (next (((LIST) list-expression))      ;Outer bindings
+             ((PAIR LIST (CDR PAIR)))        ;Loop variables
+             ()                              ;Entry bindings
+             ((NOT (PAIR? PAIR)))            ;Termination conditions
+             (((element-variable)            ;Body bindings
+               (CAR PAIR)))
+             ()                              ;Final bindings
+             . rest))
+
+      ((IN-LIST variables arguments next . rest)
+       ;; Ignore NEXT and REST; we only report the syntax error.
+       (LOOP-CLAUSE-ERROR 
+        (IN-LIST variables arguments
+                 "Malformed IN-LIST form in LOOP:")))))
+
+With the appropriate definition of SYNTACTIC-ERROR shown below, if we
+misuse IN-LIST, we should get a helpful error message in most Schemes:
+
+  (loop ((for x y z (in-list)))
+    (body x y z))
+
+  Syntax error: Malformed IN-LIST clause in LOOP:
+                (for x y z (in-list))
+
+**** Pitfalls of Reporting Syntax Errors
+
+The principle behind passing error context to any macros in terms of
+which iterators are implemented is to present coherent syntax errors
+reporting the original iterator form.  In an ideal world, this would
+always be easy, but because we are limited to the tools of SYNTAX-RULES
+and SYNTAX-RULES alone, this is not as easy as we should like.  There
+are cases where it is convenient, for example, to supply default values
+for optional parameters by recursively calling the iterator macro.
+This means, though, that if there is a syntax error for some other
+reason -- for example, if some of the arguments are named, or there are
+optional variables *and* optional arguments --, which goes undetected
+until some default values have been supplied, the wrong form will be
+reported to the user.
+
+To avoid this, it is better to rewrite iterators into invocations of
+internal macros that take error context as an extra parameter.  This
+precludes writing one iterator in terms of another one, however, which
+is an unfortunate consequence of the way that foof-loop is designed,
+which is itself an unfortunate consequence of the tools available.  We
+should like to be able to have a macro debugger that can examine the
+expansion history of the forms leading up to a syntax error, but this
+is not a reliably portable concept; few Schemes even record the
+expansion history.  (I can name only one: MIT Scheme.)
+
+Foof-loop provides no facilities for checking syntax errors beyond what
+can be detected by SYNTAX-RULES patterns.  For example, there is no way
+to verify that a variable to be bound is, in fact, a variable; if the
+user writes anything other than a variable, there will probably be a
+very strange error much later on involving invalid definitions with
+strange lambda lists.  It is not difficult to imagine the interface to
+such checks; however, they are considerably more trouble to implement
+than they would be worth in program development at the moment.
+
+** Porting to New Schemes
+
+The implementation of foof-loop is divided into three files, one of
+which is optional but useful:
+
+- foof-loop.scm implements the LOOP macro and many iterators.
+
+- syn-param.scm implements a general macro for making local macros that
+  accept named parameters with the form `(=> <name> <value>)'.
+
+- let-values.scm is optional, but implements a portable LET-VALUES form
+  (see SRFI 11) that gracefully handles single-value cases in order to
+  avoid superfluous uses of CALL-WITH-VALUES.  This definition of
+  LET-VALUES is more likely to work in Scheme systems that have
+  incorrect implementations of multiple return values, such as MIT
+  Scheme, although problems may still arise with (VALUES X), for
+  example.
+
+Ideally, these files should be loaded into their own modules, or a
+single module for foof-loop, if your Scheme system supports a module
+system or any form of namespace separation.  If this is not the case,
+you may wish to prefix some of the names of internal operations.
+
+The implementation of foof-loop is strictly limited to R5RS Scheme
+except for one element, which is the macro to signal syntax errors
+during macro expansion.  (SYNTACTIC-ERROR message irritants ...) should
+signal an error when expanded, ideally with the message and irritants
+supplied.  A legal, though not ideal, definition with the R5RS is:
+
+  (define-syntax syntactic-error (syntax-rules ()))
+
+For Scheme48, if we open the SIGNALS and NODES structures in the for-
+syntax environment, we may interactively enter a better definition:
+
+  > ,for-syntax ,open signals nodes
+  > (define-syntax syntactic-error
+      (lambda (form rename compare)
+        (apply syntax-error (map schemify (cdr form))))
+      ())       ;No auxiliary names
+
+Note that if your Scheme does not support SYNTAX-RULES, it is not R5RS-
+compliant, and it cannot load foof-loop.  Also note that foof-loop uses
+some very complicated patterns of SYNTAX-RULES, so expansion of LOOP
+forms may be slow and taxing on your Scheme system's resources.
+Unfortunately, there is no other way to do this portably.  Finally,
+note that Scheme systems that preserve the case of symbols in source
+code are not R5RS-compliant and cannot load foof-loop.  If your Scheme
+system by default preserves case, but has an option for folding case,
+you must set that option first.
+
+** Design Notes and Rationale
+
+For a comparison of (an older rendition of) foof-loop with other
+contemporary looping macros, see the Usenet article with message-id
+<1157562097.001179.11470@i42g2000cwa.googlegroups.com> posted on
+comp.lang.scheme in September of 2006.  Also, for extended comparative
+examples, see <http://mumble.net/~campbell/scheme/loop-comparison.scm>.
+These design notes are specifically about Taylor R. Campbell's variant.
+
+*** Upper and Lower Bounds on Intervals
+
+In the iterators provided, lower bounds are always included and upper
+bounds are always excluded, whether one starts from the upper bound and
+descends to the lower bound, or whether one starts from the lower bound
+and ascends to the upper bound.
+
+Inconsistent bounds make programs confusing.  Strict adherence to the
+inclusive-lower/exclusive-upper convention is the only sensible option.
+Between the R5RS, foof-loop, and many libraries that already adhere to
+it, this convention may not eliminate all off-by-one errors, but it
+makes programs much easier to write correctly from the start.  Reverse
+iteration, from more positive to more negative numbers, is an especally
+sordid source of off-by-one errors.
+
+If you write any of your own custom iterators that involve upper or
+lower bounds, please adhere to these rules.  If you have an extremely
+good reason not to adhere to these rules, I'd like to hear it.

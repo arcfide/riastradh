@@ -1,0 +1,59 @@
+;;; -*- Mode: Scheme -*-
+
+;;;; Testing Utility for Scheme
+;;;; MIT Scheme Package Descriptions
+
+;;; Copyright (C) 2007, 2009 Taylor R. Campbell.
+;;;
+;;; This file is part of TRC-Testing.
+;;;
+;;; TRC-Testing is free software: you can redistribute it and/or modify
+;;; it under the terms of the GNU Lesser General Public License as
+;;; published by the Free Software Foundation, either version 3 of the
+;;; License, or (at your option) any later version.
+;;;
+;;; TRC-Testing is distributed in the hope that it will be useful, but
+;;; WITHOUT ANY WARRANTY; without even the implied warranty of
+;;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+;;; Lesser General Public License for more details.
+;;;
+;;; You should have received a copy of the GNU Lesser General Public
+;;; License along with TRC-Testing.  If not, see
+;;; <http://www.gnu.org/licenses/>.
+
+(define-package (test)
+  (files "syn-param" "test" "mit-test")
+  (parent ())
+  (export ()
+          add-test!
+          define-test-case
+          define-test-suite
+          find-test
+          make-test-case
+          make-test-suite
+          run-test
+          test-case
+          test-case?
+          test-case/name
+          test-case/description
+          test-case/constructor
+          test-compare
+          test-eq
+          test-equal
+          test-eqv
+          test-predicate
+          test-suite?
+          test-suite/description
+          test-suite/name
+          test-suite/tests
+          ))
+
+(define-package (edwin test-support)
+  (file-case options
+    ((EDWIN) "mit-edwin")
+    (else))
+  (parent (edwin))
+  (export (edwin)
+          edwin-command$eval-test
+          edwin-command$run-test
+          ))
