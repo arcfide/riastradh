@@ -1,0 +1,57 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Simple Queue implementation
+;;; Version: 1
+;;; 
+;;; Copyright (c) 2009 Aaron W. Hsu <arcfide@sacrideo.us>
+;;; 
+;;; Permission to use, copy, modify, and distribute this software for
+;;; any purpose with or without fee is hereby granted, provided that the
+;;; above copyright notice and this permission notice appear in all
+;;; copies.
+;;; 
+;;; THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL
+;;; WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED
+;;; WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE
+;;; AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL
+;;; DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA
+;;; OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+;;; TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+;;; PERFORMANCE OF THIS SOFTWARE.
+
+(library (riastradh scheme-cml queues)
+	(export make-queue queue-empty? enqueue! dequeue!)
+	(import 
+		(rnrs base) 
+		(rnrs mutable-pairs) 
+		(rnrs records syntactic)
+		(rnrs control))
+
+(define-record-type (queue %make-queue queue?) (fields (mutable head) (mutable tail)))
+
+(define (make-queue)
+	(%make-queue '() '()))
+
+(define (queue-empty? q)
+	(null? (queue-tail q)))
+
+(define (enqueue! q e)
+	(let (
+			[tail (queue-tail q)]
+			[elem (cons e '())])
+		(if (pair? tail)
+			(begin
+				(set-cdr! tail elem)
+				(queue-tail-set! q elem))
+			(begin
+				(queue-head-set! q elem)
+				(queue-tail-set! q elem)))))
+
+(define (dequeue! q)
+	(let ([head (queue-head q)])
+		(assert (pair? head))
+		(when (null? (cdr head))
+			(queue-tail-set! q '()))
+		(queue-head-set! q (cdr head))
+		(car head)))
+		
+)
