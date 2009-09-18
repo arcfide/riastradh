@@ -50,77 +50,66 @@
 
 (define (channel-receive channel)
   (synchronize (channel-receive-rendezvous channel)))
-
-(define (poll-channel channel queue-accessor)
-  (with-channel-locked channel
-    (lambda ()
-      (if (queue-empty? (queue-accessor channel))
-          (let ((priority (channel.priority channel)))
-            (set-channel.priority! channel (+ priority 1))
-            priority)
-          #f))))
 
-;;; Argh blargle nearly symmetric blurf.
+(define (channel-rendezvous channel enqueue-accessor dequeue-accessor
+                            waiter->suspension resumer waiter->enabler
+                            make-waiter)
+
+  (define (frobnitz if-enabled if-lost/locked)
+    ((with-channel-locked channel
+       (lambda ()
+         (let ((queue (dequeue-accessor channel)))
+           (let loop ()
+             (if (queue-empty? queue)
+                 (if-lost/locked)
+                 (let ((waiter (dequeue! queue)))
+                   (with-suspension-claimed (waiter->suspension waiter)
+                     (lambda (resume disclaim)
+                       disclaim         ;ignore
+                       (lambda ()
+                         (if-enabled
+                          (let ((enabler (waiter->enabler waiter)))
+                            (lambda ()
+                              (resume resumer)
+                              (enabler))))))
+                     loop)))))))))
+
+  (define (poll)
+    (with-channel-locked channel
+      (lambda ()
+        (if (queue-empty? (dequeue-accessor channel))
+            (let ((priority (channel.priority channel)))
+              (set-channel.priority! channel (+ priority 1))
+              priority)
+            #f))))
+
+  (define (enable if-enabled if-disabled)
+    (frobnitz if-enabled (lambda () if-disabled)))
+
+  (define (block suspension if-enabled if-blocked)
+    (frobnitz if-enabled
+              (lambda ()
+                (enqueue! (enqueue-accessor channel) (make-waiter suspension))
+                if-blocked)))
+
+  (base-rendezvous poll enable block))
 
 (define (channel-send-rendezvous channel message)
-
-  (define (seek-receiver if-found if-not-found)
-    (with-channel-locked channel
-      (lambda ()
-        (let ((receivers (channel.receivers channel)))
-          (let loop ()
-            (if (queue-empty? receivers)
-                (if-not-found)
-                (let ((receiver (dequeue! receivers)))
-                  (if (maybe-resume receiver (lambda () message))
-                      (if-found)
-                      (loop)))))))))
-
-  (define (poll)
-    (poll-channel channel channel.receivers))
-
-  (define (enable if-enabled if-disabled)
-    ((seek-receiver (lambda () (lambda () (if-enabled (lambda () (values)))))
-                    (lambda () if-disabled))))
-
-  (define (block suspension if-enabled if-blocked)
-    ((seek-receiver
-      (lambda () (lambda () (if-enabled (lambda () (values)))))
-      (lambda ()
-        (enqueue! (channel.senders channel) (cons suspension message))
-        if-blocked))))
-
-  (base-rendezvous poll enable block))
+  (channel-rendezvous channel channel.senders channel.receivers
+    (lambda (receiver) receiver)        ;waiter->suspension
+    (lambda () message)                 ;resumer
+    (lambda (receiver)                  ;waiter->enabler
+      receiver ;ignore
+      (lambda () (values)))
+    (lambda (suspension)                ;make-waiter
+      (cons suspension message))))
 
 (define (channel-receive-rendezvous channel)
-
-  (define (seek-sender if-found if-not-found)
-    (with-channel-locked channel
-      (lambda ()
-        (let ((senders (channel.senders channel)))
-          (let loop ()
-            (if (queue-empty? senders)
-                (if-not-found)
-                (let ((sender.message (dequeue! senders)))
-                  (let ((sender (car sender.message))
-                        (message (cdr sender.message)))
-                    (if (maybe-resume sender (lambda () (values)))
-                        (if-found message)
-                        (loop))))))))))
-
-  (define (poll)
-    (poll-channel channel channel.senders))
-
-  (define (enable if-enabled if-disabled)
-    ((seek-sender
-      (lambda (message) (lambda () (if-enabled (lambda () message))))
-      (lambda () if-disabled))))
-
-  (define (block suspension if-enabled if-blocked)
-    ((seek-sender
-      (lambda (message) (lambda () (if-enabled (lambda () message))))
-      (lambda ()
-        (enqueue! (channel.receivers channel) suspension)
-        if-blocked))))
-
-  (base-rendezvous poll enable block))
+  (channel-rendezvous channel channel.receivers channel.senders
+    car                                 ;waiter->suspension
+    values                              ;resumer
+    (lambda (sender.message)            ;waiter->enabler
+      (let ((message (cdr sender.message)))
+        (lambda () message)))
+    (lambda (suspension)                ;make-waiter
+      suspension)))

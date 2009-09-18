@@ -47,34 +47,43 @@
 (define (mailbox-send mailbox message)
   (enter-critical-section
     (lambda (critical-token)
-      (with-mailbox-locked mailbox
-        (lambda ()
-          (let ((queue (mailbox.queue mailbox)))
-            (if (mailbox.priority mailbox)
-                (enqueue! queue message)
-                (let loop ()
-                  (cond ((queue-empty? queue)
-                         (set-mailbox.priority! mailbox 1)
-                         (enqueue! queue message))
-                        ((not
-                          (maybe-resume (dequeue! queue) (lambda () message)))
-                         (loop))))))))
-      (exit-critical-section critical-token (lambda () (values))))))
+      ;** Do not beta-reduce -- bug in Scheme48's auto-integrator.
+      (let ((continuation
+             (let ((queue (mailbox.queue mailbox)))
+               (let loop ()
+                 ((with-mailbox-locked mailbox
+                    (lambda ()
+                      (if (or (mailbox.priority mailbox)
+                              (and (queue-empty? queue)
+                                   (begin (set-mailbox.priority! mailbox 1)
+                                          #t)))
+                          (begin (enqueue! queue message)
+                                 (lambda () (lambda () (values))))
+                          (with-suspension-claimed (dequeue! queue)
+                            (lambda (resume disclaim)
+                              disclaim  ;ignore
+                              (lambda ()
+                                (lambda ()
+                                  (resume (lambda () message)))))
+                            (lambda ()
+                              loop))))))))))
+        (exit-critical-section critical-token continuation)))))
 
 (define (mailbox-receive mailbox)
   (synchronize (mailbox-receive-rendezvous mailbox)))
-
+
 (define (mailbox-receive-rendezvous mailbox)
 
-  (define (seek-message if-found if-not-found)
-    (let ((queue (mailbox.queue mailbox)))
-      (with-mailbox-locked mailbox
-        (lambda ()
-          (if (queue-empty? queue)
-              (if-not-found)
-              (let ((message (dequeue! queue)))
-                (set-mailbox.priority! mailbox (if (queue-empty? queue) #f 1))
-                (if-found message)))))))
+  (define (frobnitz if-enabled if-lost/locked)
+    ((let ((queue (mailbox.queue mailbox)))
+       (with-mailbox-locked mailbox
+         (lambda ()
+           (if (queue-empty? queue)
+               (if-lost/locked)
+               (let ((message (dequeue! queue)))
+                 (set-mailbox.priority! mailbox (if (queue-empty? queue) #f 1))
+                 (lambda ()
+                   (if-enabled (lambda () message))))))))))
 
   (define (poll)
     (with-mailbox-locked mailbox
@@ -86,15 +95,12 @@
               #f)))))
 
   (define (enable if-enabled if-disabled)
-    ((seek-message
-      (lambda (message) (lambda () (if-enabled (lambda () message))))
-      (lambda () if-disabled))))
+    (frobnitz if-enabled (lambda () if-disabled)))
 
   (define (block suspension if-enabled if-blocked)
-    ((seek-message
-      (lambda (message) (lambda () (if-enabled (lambda () message))))
-      (lambda ()
-        (enqueue! (mailbox.queue mailbox) suspension)
-        if-blocked))))
+    (frobnitz if-enabled
+              (lambda ()
+                (enqueue! (mailbox.queue mailbox) suspension)
+                if-blocked)))
 
   (base-rendezvous poll enable block))

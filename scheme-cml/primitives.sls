@@ -19,7 +19,8 @@
 ;;; PERFORMANCE OF THIS SOFTWARE.
 
 (library (riastradh scheme-cml primitives)
-	(export make-prv map-prv primitive-poll primitive-synchronize prv?)
+	(export make-prv map-prv primitive-poll primitive-synchronize prv?
+		maybe-resume with-suspension-claimed)
 	(import
 		(rnrs base)
 		(srfi :9)

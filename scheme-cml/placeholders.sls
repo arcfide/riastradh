@@ -29,6 +29,8 @@
 		(except (rnrs base) error)
 		(riastradh scheme-cml locked-records)
 		(riastradh scheme-cml rendezvous)
+		(riastradh scheme-cml threading)
+		(riastradh scheme-cml primitives)
 		(srfi :23)
 		(srfi private include))
 

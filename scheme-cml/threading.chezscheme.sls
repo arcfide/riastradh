@@ -22,19 +22,10 @@
 	(export 
 		enter-critical-section
 		exit-critical-section
-		suspend
-		maybe-resume)
+		make-suspender
+		suspender/abort suspender/lock suspender/resume suspender/resumed?
+		suspender/suspend suspender/unlock)
 	(import (chezscheme))
-
-(define-record-type (<suspension-token> make-suspension-token suspension-token?)
-	(fields
-		(mutable thunk suspension-token-thunk suspension-token-thunk-set!)
-		(immutable mutex suspension-token-mutex)
-		(immutable condition suspension-token-condition))
-	(protocol (lambda (p) (lambda () (p #f (make-mutex) (make-condition))))))
-
-(define-record-type suspension
-	(fields token composition))
 
 (define (enter-critical-section proc)
 	(proc 'dummy))
@@ -42,27 +33,35 @@
 (define (exit-critical-section token continuation)
 	(continuation))
 
-(define (suspend critical-token procedure)
-	(let ((token (make-suspension-token)))
-		((with-mutex (suspension-token-mutex token)
-			 (procedure
-				(lambda (composition) (make-suspension token composition))
-				(lambda ()
-					(condition-wait 
-						(suspension-token-condition token)
-						(suspension-token-mutex token))
-					(suspension-token-thunk token))
-				(lambda (k) k))))))
+(define-record-type suspender
+	(fields (immutable mutex) (immutable condition)
+		(mutable set?) (mutable value))
+	(protocol (lambda (p) (lambda () (p (make-mutex) (make-condition) #f #f)))))
 
-(define (maybe-resume suspension thunk)
-	(let ([token (suspension-token suspension)])
-		(with-mutex (suspension-token-mutex token)
-			(if (not (suspension-token-thunk token))
-				(begin 
-					(suspension-token-thunk-set! token
-						(lambda () ((suspension-composition suspension) thunk)))
-					(condition-signal (suspension-token-condition token))
-					#t)
-				#f))))
+(define (suspender/lock s)
+	(mutex-acquire (suspender-mutex s)))
+
+(define (suspender/unlock s)
+	(mutex-release (suspender-mutex s)))
+
+(define (suspender/resumed? s)
+	(suspender-set? s))
+
+(define (suspender/abort s)
+	(suspender-set?-set! s #t))
+
+(define (suspender/resume s v)
+	(suspender-set?-set! s #t)
+	(suspender-value-set! s v)
+	(condition-signal (suspender-condition s)))
+
+(define (suspender/suspend t s)
+	(let loop ()
+		(condition-wait (suspender-condition s) (suspender-mutex s))
+		(if (suspender-set? s)
+			(let ([v (suspender-value s)])
+				(suspender-value-set! s #f)
+				v)
+			(loop))))
 
 )

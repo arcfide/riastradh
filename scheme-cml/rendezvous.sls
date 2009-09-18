@@ -37,11 +37,7 @@
 		synchronize/timeout
 		thunk-rendezvous
 		values-rendezvous
-
-		base-rendezvous
-		enter-critical-section
-		exit-critical-section
-		maybe-resume)
+		base-rendezvous)
 	(import
 		(except (rnrs base) error)
 		(riastradh scheme-cml locked-records)

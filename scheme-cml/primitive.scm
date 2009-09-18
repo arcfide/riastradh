@@ -47,24 +47,6 @@
             (prv.blocker prv)
             (compose-unary procedure (prv.composition prv))))
 
-(define (primitive-synchronize prvs)
-  (%primitive-poll prvs
-    (lambda (critical-token thunk)
-      (exit-critical-section critical-token (lambda () thunk)))
-    (lambda (critical-token prvs)
-      (suspend critical-token
-        (lambda (make-suspension if-suspending if-not-suspending)
-          (let loop ((prvs prvs))
-            (if (null-list? prvs)
-                (if-suspending)
-                (let ((composition (prv.composition (car prvs))))
-                  ((prv.blocker (car prvs))
-                   (make-suspension composition)
-                   (lambda (thunk)
-                     (if-not-suspending (lambda () (composition thunk))))
-                   (lambda ()
-                     (loop (cdr prvs))))))))))))
-
 (define (primitive-poll prv if-enabled if-blocked)
   (%primitive-poll prv
     (lambda (critical-token thunk)
@@ -74,7 +56,7 @@
     (lambda (critical-token prvs)
       prvs                              ;ignore
       (exit-critical-section critical-token if-blocked))))
-
+
 (define (%primitive-poll prvs if-enabled if-blocked)
   (let ((all-prvs prvs))
     (enter-critical-section
@@ -106,3 +88,62 @@
                   (or (and (= ap -1) (= bp -1))
                       (< ap bp))))
               priority.datum-list))
+
+(define-record-type <suspension>
+    (make-suspension suspender composition)
+    suspension?
+  (suspender suspension.suspender)
+  (composition suspension.composition))
+
+(define (primitive-synchronize prvs)
+  (%primitive-poll prvs
+    (lambda (critical-token thunk)
+      (exit-critical-section critical-token (lambda () thunk)))
+    (lambda (critical-token prvs)
+      ((let ((suspender (make-suspender)))
+         (with-suspender-locked suspender
+           (lambda ()
+             (let loop ((prvs prvs))
+               (if (null-list? prvs)
+                   (suspender/suspend critical-token suspender)
+                   (let ((composition (prv.composition (car prvs))))
+                     ((prv.blocker (car prvs))
+                      (make-suspension suspender composition)
+                      (lambda (thunk)
+                        (suspender/abort suspender)
+                        (lambda ()
+                          (composition thunk)))
+                      (lambda ()
+                        (loop (cdr prvs))))))))))))))
+
+(define (maybe-resume suspension thunk)
+  (let ((suspender (suspension.suspender suspension))
+        (composition (suspension.composition suspension)))
+    (with-suspender-locked suspender
+      (lambda ()
+        (if (suspender/resumed? suspender)
+            #f
+            (begin
+              (suspender/resume suspender (lambda () (composition thunk)))
+              #t))))))
+
+(define (with-suspension-claimed suspension if-claimed if-not-claimed)
+  (let ((suspender (suspension.suspender suspension)))
+    (suspender/lock suspender)
+    (if (suspender/resumed? suspender)
+        (begin
+          (suspender/unlock suspender)
+          (if-not-claimed))
+        (if-claimed
+         (let ((composition (suspension.composition suspension)))
+           (lambda (thunk)
+             (suspender/resume suspender (lambda () (composition thunk)))
+             (suspender/unlock suspender)))
+         (lambda ()
+           (suspender/unlock suspender))))))
+
+(define (with-suspender-locked suspender body)
+  (suspender/lock suspender)
+  (let ((result (body)))
+    (suspender/unlock suspender)
+    result))

@@ -113,10 +113,9 @@
   (let ((request (mailbox-receive mailbox)))
     (cond ((request:acquire? request)
            (enqueue! pending request)
-           ((if (or (queue-empty? pending)
-                    (not (positive? value)))
-                semaphore-loop
-                semaphore-grant)
+           ((if (positive? value)
+                semaphore-grant
+                semaphore-loop)
             mailbox
             value
             pending))

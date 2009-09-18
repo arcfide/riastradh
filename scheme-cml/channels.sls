@@ -31,6 +31,7 @@
 		(riastradh scheme-cml locked-records)
 		(riastradh scheme-cml queues)
 		(riastradh scheme-cml rendezvous)
+		(riastradh scheme-cml primitives)
 		(srfi private include))
 
 (include/resolve-ci ("riastradh" "scheme-cml") "channel.scm")

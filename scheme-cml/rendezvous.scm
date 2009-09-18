@@ -185,8 +185,8 @@
 ;;; the term, but this is the unfortunate term that Reppy &c. chose for
 ;;; the mechanism of signalling negative acknowledgements.
 
-;;; To reduce the amount of code, we could replace condvars altogether
-;;; by placeholders, which are currently implemented separately.
+;;; These are different from placeholders only in that they can be set
+;;; more than once to no effect.
 
 (define-locked-record-type <condvar>
     (%make-condvar priority waiters)
@@ -204,18 +204,18 @@
     (lambda (critical-token)
       ;** Do not beta-reduce -- bug in Scheme48's auto-integrator.
       (let ((continuation
-             ((with-condvar-locked condvar
-                (lambda ()
-                  (if (condvar.priority condvar)
-                      (lambda () (lambda () (values)))
-                      (let ((waiters (condvar.waiters condvar)))
-                        (set-condvar.waiters! condvar #f)
-                        (lambda ()
-                          (for-each
-                           (lambda (waiter)
-                             (maybe-resume waiter (lambda () (values))))
-                           waiters)
-                          (lambda () (values))))))))))
+             (with-condvar-locked condvar
+               (lambda ()
+                 (let ((waiters (condvar.waiters condvar)))
+                   (if (condvar.priority condvar)
+                       (lambda () (values))
+                       (begin (set-condvar.priority! condvar 1)
+                              (set-condvar.waiters! condvar #f)
+                              (lambda ()
+                                (for-each
+                                 (lambda (waiter)
+                                   (maybe-resume waiter (lambda () (values))))
+                                 waiters)))))))))
         (exit-critical-section critical-token continuation)))))
 
 (define (condvar-prv condvar)

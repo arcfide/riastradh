@@ -30,6 +30,8 @@
 		(riastradh scheme-cml locked-records)
 		(riastradh scheme-cml queues)
 		(riastradh scheme-cml rendezvous)
+		(riastradh scheme-cml primitives)
+		(riastradh scheme-cml threading)
 		(srfi :8)
 		(srfi private include))
 
