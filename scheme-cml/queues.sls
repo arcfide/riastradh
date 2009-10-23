@@ -26,10 +26,9 @@
 		(rnrs records syntactic)
 		(rnrs control))
 
-(define-record-type (queue %make-queue queue?) (fields (mutable head) (mutable tail)))
-
-(define (make-queue)
-	(%make-queue '() '()))
+(define-record-type (queue make-queue queue?) 
+	(fields (mutable head) (mutable tail))
+	(protocol (lambda (p) (lambda () (p '() '())))))
 
 (define (queue-empty? q)
 	(null? (queue-tail q)))

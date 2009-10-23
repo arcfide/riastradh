@@ -36,8 +36,7 @@
 		synchronize-chosen-rendezvous/timeout
 		synchronize/timeout
 		thunk-rendezvous
-		values-rendezvous
-		base-rendezvous)
+		values-rendezvous)
 	(import
 		(except (rnrs base) error)
 		(riastradh scheme-cml locked-records)

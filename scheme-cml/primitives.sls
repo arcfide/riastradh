@@ -19,17 +19,5 @@
 ;;; PERFORMANCE OF THIS SOFTWARE.
 
 (library (riastradh scheme-cml primitives)
-	(export make-prv map-prv primitive-poll primitive-synchronize prv?
-		maybe-resume with-suspension-claimed)
-	(import
-		(rnrs base)
-		(srfi :9)
-		(only (srfi :1) null-list?)
-		(rename (only (chezscheme) sort!) (sort! list-sort!))
-		(riastradh scheme-cml misc)
-		(riastradh scheme-cml threading)
-		(srfi private include))
-
-(include/resolve-ci ("riastradh" "scheme-cml") "primitive.scm")
-
-)
+	(export make-prv map-prv primitive-poll primitive-synchronize prv?)
+	(import (riastradh scheme-cml primitive-internal)))
