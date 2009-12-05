@@ -2,7 +2,7 @@
 
 ;;;; Extensible Looping Macros, version 9 (BETA)
 
-;;; Copyright (c) 2008, Taylor R. Campbell
+;;; Copyright (c) 2008-2009, Taylor R. Campbell
 ;;;
 ;;; Redistribution and use in source and binary forms, with or without
 ;;; modification, are permitted provided that the following conditions
@@ -155,7 +155,7 @@
      (SYNTACTIC-ERROR message (FOR variable ... (iterator . arguments))))))
 
 (define-syntax %loop-check
-  (syntax-rules ()
+  (syntax-rules (CONTEXT)
     ((%LOOP-CHECK syntactic-check operand
                   (CONTEXT iterator (variable ...) arguments)
                   if-ok)
