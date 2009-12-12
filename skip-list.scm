@@ -900,7 +900,7 @@
                     ((+1) (search-across level node* (non-node)))
                     ((0)
                      (if-found
-                      (node-datum node)
+                      (node-datum node*)
                       (lambda (datum)
                         (set-node-datum! node* datum))
                       (lambda ()

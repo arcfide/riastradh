@@ -60,6 +60,6 @@
     (srfi :23)
     (srfi private include))
     
-(include/resolve-ci ("riastradh") "skip-list.scm")
+(include/resolve ("riastradh") "skip-list.scm")
 
 )
