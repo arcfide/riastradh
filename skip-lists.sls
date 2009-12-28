@@ -49,7 +49,8 @@
     skip-list-type:symbol
     skip-list-type:string
     skip-list-type:string-ci
-    test-skip-list)
+    test-skip-list
+    in-skip-list)
   (import
     (except (rnrs base) error)
     (rnrs control)
