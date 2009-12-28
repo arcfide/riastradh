@@ -66,6 +66,7 @@
                    (with-suspension-claimed (waiter->suspension waiter)
                      (lambda (resume disclaim)
                        disclaim         ;ignore
+                       (set-channel.priority! channel 1)
                        (lambda ()
                          (if-enabled
                           (let ((enabler (waiter->enabler waiter)))
