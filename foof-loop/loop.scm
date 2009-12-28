@@ -1160,8 +1160,7 @@
              ((variable START variable))        ;Loop variables
              ()                                 ;Entry bindings
              ((<= variable END))                ;Termination conditions
-             (((variable)                       ;Body bindings
-               (- variable STEP)))
+             (((variable) (- variable STEP)))   ;Body bindings
              ()                                 ;Final bindings
              . rest)))
 
@@ -1171,13 +1170,13 @@
      (LOOP-CLAUSE-ERROR-IF-NOT-NAME variable
          (CONTEXT DOWN-FROM (variable) (start-expression (BY step-expression)))
        (next (((START) start-expression)        ;Outer bindings
-             ((STEP) step-expression))
-            ((variable START variable))         ;Loop variables
-            (((variable) (- variable STEP)))    ;Entry bindings
-            ()                                  ;Termination conditions
-            ()                                  ;Body bindings
-            ()                                  ;Final bindings
-            . rest)))
+              ((STEP) step-expression))
+             ((variable START variable))        ;Loop variables
+             ()                                 ;Entry bindings
+             ()                                 ;Termination conditions
+             (((variable) (- variable STEP)))   ;Body bindings
+             ()                                 ;Final bindings
+             . rest)))
 
     ;; Add a default step of 1.
     ((DOWN-FROM (variable)

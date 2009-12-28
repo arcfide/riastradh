@@ -1,14 +1,42 @@
 * foof-loop: A Simple, Extensible Scheme Looping Facility -*-outline-*-
 
-This is the reference manual for foof-loop version 9 (BETA).  This file
-was written by Taylor R. Campbell and is placed in the Public Domain.
+This is the reference manual for foof-loop version 9 (BETA).
 
 The most recently released version of this file is permanently stored
 at <http://mumble.net/~campbell/scheme/foof-loop.txt>.  This file is
 temporarily stored, during the beta period of foof-loop version 9, at
-<http://mumble.net/~campbell/tmp/foof-loop.txt>.  This document is not
-finished: to be written is a section on augmented error reporting for
-the authors of iterators.
+<http://mumble.net/~campbell/tmp/foof-loop.txt>.
+
+** Copying
+
+Copyright (c) 2008-2009, Taylor R. Campbell
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+ * Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+
+ * Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+ * Neither the names of the authors nor the names of contributors may
+   be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE AUTHORS ``AS IS'' AND ANY EXPRESS OR
+IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED.  IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY DIRECT,
+INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
 
 ** Installation
 
@@ -695,6 +723,14 @@ The loop is controlled by the loop clauses:
     variables, and user variables bound.  If true, the iteration
     continues for WHILE and terminates for UNTIL, and vice versa.
 
+Beware:  The interaction between user termination conditions and final
+expressions can be confusing, because they are evaluated in different
+environments, in which some iterators, such as DOWN-FROM, shadow some
+variables, so that it appears that a user termination condition and a
+final expression disagree on the value of the `same' variable; see the
+section on DOWN-FROM for more details.  Of course, the two variables
+are not the same; they merely share a name.
+
 *** Lazy Loops
 
 (LAZY-LOOP <loop-name> (<loop-clause> ...)
@@ -744,7 +780,8 @@ When a LOOP form is fully expanded, the result has the form of:
       (LET-VALUES ((<entry-bvl> <entry-producer>)
                    ...)
         (LET ((FINISH (LAMBDA ()
-                        (LET-VALUES ((<final-bvl> <final-producer>))
+                        (LET-VALUES ((<final-bvl> <final-producer>)
+                                     ...)
                           <final-expression>))))
           (IF (OR <termination-condition> ...)
               (FINISH)
@@ -761,7 +798,7 @@ Each <*-bvl> is a bound variable list supplied by an iterator or by the
 user.  Each <*-producer> is an expression yielding multiple values to
 be distributed to the corresponding bound variable list.  The
 <user-bvl>s are from user-supplied LET and LET-VALUES clauses; the
-<user-termination-conditions> are from WHILE and UNTIL clauses.
+<user-termination-condition>s are from WHILE and UNTIL clauses.
 
 LOOP-PROCEDURE is a name invisible to all of the forms involved in the
 loop except for the macro to which the loop's name is bound in the loop
@@ -1145,48 +1182,38 @@ at most, support for iterators to supply declarations in the loop.
   parameter is supplied, they must furthermore all be real numbers.
   They are all evaluated once before the loop begins.
 
-  <Number> is a loop variable in UP-FROM.  In DOWN-FROM, the treatment
-  of <number> is somewhat subtle in order to do the right thing as much
-  as possible, illustrated in the examples (to which the baffled reader
-  may wish to skip immediately).  <Number> is a loop variable, and
-  alternately an entry variable or a body variable, depending on the
-  use of DOWN-FROM.  If DOWN-FROM is given a lower bound, then <number>
-  is a body variable, and its value will never descend below <low> as a
-  body variable.  The final value of the variable will be not <low>,
-  but the least value it attains before descending below <low>, which
-  may or may not be <low>.  If DOWN-FROM is not given a lower bound,
-  then <number> is an entry variable, initialized to <step> less than
-  the value of the loop variable <number>.  There are two consequences
-  to this, and two reasons motivating it:
+  <Number> is a loop variable in UP-FROM.  In DOWN-FROM, <number> is
+  both a loop variable and a body variable, in the latter case having
+  the value (- <number (as a loop variable)> <step>).  Thus, <number>
+  always lies in the interval [<low>, <high>] for both UP-FROM and
+  DOWN-FROM, and in the body of a loop, it always lies in the interval
+  [<low>, <high>), assuming that the loop does not explicitly update
+  <number>.
 
-    (C1) After updating <number> as a loop variable to some number N,
-         <number> as a body variable in the next iteration will be
-         <step> *less* than N.
+  There are three important consequences to this somewhat special
+  treatment of <number> by DOWN-FROM:
 
-    (C2) <Number> will be initialized to the value of <high>, but
-         unless the loop terminates with zero iterations, neither the
-         loop variable <number> nor the body variable <number> will
-         ever be observed with the value <high>.  In the rare case that
-         the loop terminates with zero iterations, <number> may be
-         observed in the final expression with the value of <high>.
+  1. After updating <number> as a loop variable to some number N,
+     <number> as a body variable in the next iteration will be
+     <step> *less* than N.
 
-    (R1) As repeated in the introduction, lower bounds are inclusive,
-         and upper bounds are exclusive.  However, <high> - <low> may
-         not be an integral multiple of <step>, so that <number> may
-         never be <low>.  With the semantics chosen, <number> will at
-         least always be in the interval [<low>, <high>], and in fact
-         as a body variable always in the interval [<low>, <high>);
-         only in the rare case of a loop terminated after zero
-         iterations will <number> be observable with the value <high>.
-         (Of course, with explicit updates, it may take on any value.)
+  2. <Number> will be initialized to the value of <high>, but unless
+     the loop terminates with zero iterations, neither the loop
+     variable <number> nor the body variable <number> will ever be
+     observed with the value <high>.  In the rare case that the loop
+     terminates with zero iterations, <number> may be observed in the
+     final expression with the value of <high>.
 
-    (R2) When there is no lower bound, it is often useful (a) to write
-         user-supplied termination conditions in terms of <number>, and
-         (b) to use, in the final expression, the value of <number>
-         that induced termination of the loop.  The example of a vector
-         quick-sorting routine below illustrates such a use of <number>
-         in scanning backward from the end of a subvector past elements
-         greater than the pivot.
+  3. There is an unfortunate interaction between
+     - DOWN-FROM,
+     - references to <number> in the final expression, and
+     - user termination conditions,
+     because the final expression is closed over the binding of
+     <number> as a loop variable, but user termination conditions are
+     evaluated in the scope of the binding of <number> as a body
+     variable.  Thus, the user termination condition and the final
+     expression see different values of their respective variables
+     named <number>.
 
   The more persevering reader, no doubt now exhausted by the above
   tortuous contortions of explanation, will be relieved to escape into
@@ -1224,22 +1251,39 @@ at most, support for iterators to supply declarations in the loop.
                      (proceed (=> primes (cons i primes))))
               (proceed)))))
 
-    (define (vector-quick-sort! elt< vector start end)
+    (define (vector-quick-sort! vector start end elt<)
       (loop sort ((start start) (end end))
         (if (< 1 (- end start))
             (let ((pivot (select-pivot vector start end)))
               (loop continue ((i start) (j end))
-                (let ((i (loop ((for i (up-from i))
-                                (while (elt< (vector-ref vector i) pivot)))
-                           => i))
-                      (j (loop ((for j (down-from j))
-                                (while (elt< pivot (vector-ref vector j))))
-                           => j)))
+                (let ((i (loop scan ((for i (up-from i)))
+                           => i
+                           (if (elt< (vector-ref vector i) pivot) (scan) i)))
+                      (j (loop scan ((for j (down-from j)))
+                           => j
+                           (if (elt< pivot (vector-ref vector j)) (scan) j))))
                   (if (< i j)
                       (begin (vector-exchange! vector i j)
                              (continue (+ i 1) j))
                       (begin (sort (=> end i))
                              (sort (=> start (+ j 1)))))))))))
+
+  It is tempting in the last example to use user-supplied termination
+  conditions for the inner loops, such as
+
+    (loop ((for j (down-from j))
+           (while (elt< pivot (vector-ref vector j))))
+      => j)
+
+  However, this would bring upon the user the consequences of the
+  unfortunate interaction between DOWN-FROM, references to <number>
+  (here j) in the final expression, and user termination conditions.
+  This would yield a value of j off by one, because the final
+  expression is closed over the binding of j as a loop variable, before
+  the iterator termination conditions (of which there are none) have
+  been tested, the body bindings (binding j to (- j 1)) created, and
+  the user termination conditions evaluated -- in an environment with
+  the body bindings.
 
 *** Accumulating
 
@@ -1526,22 +1570,19 @@ errors that correspond with what was actually the input to the LOOP
 macro, these iterators pass error context descriptors to one another.
 Error context is of the form
 
-  (<name> (<variable> ...) <arguments> <message>),
+  (CONTEXT <name> (<variable> ...) <arguments>),
 
 where <name> is the name of the iterator, the <variable>s are the forms
-passed in the FOR clause before the iterator, <arguments> is the tail
-of the iterator subform inside the FOR clause, and <message> is a
-message explaining the error.  Because of limitations in SYNTAX-RULES,
-the error reporting macros cannot construct a message containing
-<name>; thus <message> should identify the name of the iterator.  The
-macro LOOP-CLAUSE-ERROR invokes SYNTACTIC-ERROR with a FOR form that
+passed in the FOR clause before the iterator, and <arguments> is the
+tail of the iterator subform inside the FOR clause.  The macro
+LOOP-CLAUSE-ERROR invokes SYNTACTIC-ERROR with a FOR form that
 corresponds with the original FOR form seen by LOOP:
 
-  (LOOP-CLAUSE-ERROR (<name> (<variable> ...) <arguments> <message>))
+  (LOOP-CLAUSE-ERROR (CONTEXT <name> (<variable> ...) <arguments>))
 
 expands to
 
-  (SYNTACTIC-ERROR <message>
+  (SYNTACTIC-ERROR "Malformed LOOP clause:"
                    (FOR <variable> ...
                         (<name> . <arguments>))).
 
@@ -1563,9 +1604,7 @@ that matches any possible invocation of the iterator from LOOP:
 
       ((IN-LIST variables arguments next . rest)
        ;; Ignore NEXT and REST; we only report the syntax error.
-       (LOOP-CLAUSE-ERROR 
-        (IN-LIST variables arguments
-                 "Malformed IN-LIST form in LOOP:")))))
+       (LOOP-CLAUSE-ERROR (CONTEXT IN-LIST variables arguments)))))
 
 With the appropriate definition of SYNTACTIC-ERROR shown below, if we
 misuse IN-LIST, we should get a helpful error message in most Schemes:
@@ -1573,8 +1612,46 @@ misuse IN-LIST, we should get a helpful error message in most Schemes:
   (loop ((for x y z (in-list)))
     (body x y z))
 
-  Syntax error: Malformed IN-LIST clause in LOOP:
+  Syntax error: Malformed LOOP clause:
                 (for x y z (in-list))
+
+**** Detailed Syntax Checks
+
+Several macros are provided to perform more detailed syntax checks.
+These take some argument from the syntax of an iterator invocation, an
+error context descriptor with which they signal an error if the syntax
+is invalid, and a form to which they expand if the syntax is valid.
+
+(LOOP-CLAUSE-ERROR-IF-NOT-NAME <name> <error-context> <if-valid>)
+
+  Checks whether <name> is a name.
+
+(LOOP-CLAUSE-ERROR-IF-NOT-NAMES (<name> ...) <error-context> <if-valid>)
+
+  Checks whether each <name> is a name.
+
+(LOOP-CLAUSE-ERROR-IF-NOT-BVL <bvl> <error-context> <if-valid>)
+
+  Checks whether <bvl> is a bound variable list.
+
+With these, we can write IN-LIST to check syntax even more carefully:
+
+  (define-syntax in-list
+    (syntax-rules ()
+      ((IN-LIST (element-variable) (list-expression) next . rest)
+       (LOOP-CLAUSE-ERROR-IF-NOT-NAME element-variable
+           (CONTEXT IN-LIST (element-variable) (list-expression))
+         (next (((LIST) list-expression))    ;Outer bindings
+               ((PAIR LIST (CDR PAIR)))      ;Loop variables
+               ()                            ;Entry bindings
+               ((NOT (PAIR? PAIR)))          ;Termination conditions
+               (((element-variable)          ;Body bindings
+                 (CAR PAIR)))
+               ()                            ;Final bindings
+               . rest)))
+
+      ((IN-LIST variables arguments next . rest)
+       (LOOP-CLAUSE-ERROR (CONTEXT IN-LIST variables arguments)))))
 
 **** Pitfalls of Reporting Syntax Errors
 
