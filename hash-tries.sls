@@ -2,6 +2,7 @@
 	(export
 		make-hash-trie-type
 		hash-trie-type?
+		hash-trie?
 		hash-trie-type/key-equality-predicate
 		hash-trie-type/key-hash-function
 		make-hash-trie
